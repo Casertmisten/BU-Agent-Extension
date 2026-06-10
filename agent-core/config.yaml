@@ -1,12 +1,15 @@
+logging:
+  level: DEBUG
+
 llm:
-  provider: openai
-  model: gpt-4o
-  api_key: ${OPENAI_API_KEY}
+  provider: dashscope
+  model: glm-5.1
+  api_key: sk-ef7af9d9ab4b4abda79cd655deaed570
 
 vlm:
-  provider: openai
-  model: gpt-4o
-  api_key: ${OPENAI_API_KEY}
+  provider: dashscope
+  model: qwen3.6-35b-a3b
+  api_key: sk-ef7af9d9ab4b4abda79cd655deaed570
 
 server:
   host: localhost

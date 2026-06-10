@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import {
+import '../content/content.js';
+
+const {
   tagElements, clearTags, get_element_info,
   clickElement, inputText, scrollPage,
   enableOverlay, disableOverlay,
-} from '../content/content.js';
+} = window.__BU_AGENT__;
 
 describe('tagElements', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
