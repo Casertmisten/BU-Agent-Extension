@@ -1,0 +1,14 @@
+llm:
+  provider: openai
+  model: gpt-4o
+  api_key: ${OPENAI_API_KEY}
+
+vlm:
+  provider: openai
+  model: gpt-4o
+  api_key: ${OPENAI_API_KEY}
+
+server:
+  host: localhost
+  port: 8765
+  heartbeat_interval: 30
