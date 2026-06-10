@@ -10,11 +10,13 @@ from agentscope.agent import Agent
 from agentscope.tool import Toolkit, FunctionTool
 from agentscope.message import UserMsg
 from agentscope.event import EventType
-
 from browser.connection import BrowserConnection
 from browser.protocol import validate_message
 from browser.tools import create_browser_tools
 from config_loader import load_config
+from logger import get_logger, setup_logging
+
+log = get_logger("server")
 
 
 SYSTEM_PROMPT = """你是一个浏览器自动化 Agent。你通过可用工具控制网页浏览器。
@@ -43,6 +45,7 @@ def _create_model(config: dict):
     if provider == "openai":
         from agentscope.model import OpenAIChatModel
         from agentscope.credential import OpenAICredential
+        log.info("Creating OpenAI model: %s", model_name)
         return OpenAIChatModel(
             credential=OpenAICredential(api_key=api_key),
             model=model_name,
@@ -50,6 +53,7 @@ def _create_model(config: dict):
     elif provider == "dashscope":
         from agentscope.model import DashScopeChatModel
         from agentscope.credential import DashScopeCredential
+        log.info("Creating DashScope model: %s", model_name)
         return DashScopeChatModel(
             credential=DashScopeCredential(api_key=api_key),
             model=model_name,
@@ -63,6 +67,7 @@ def _create_model(config: dict):
 
 def create_agent(conn: BrowserConnection, vlm_model, viewport_info: dict, llm_model) -> Agent:
     """创建注册了全部 9 个工具的浏览器自动化 Agent。"""
+    log.info("Creating browser_agent with 9 tools")
     tool_functions = create_browser_tools(conn, vlm_model, viewport_info)
 
     tool_objects = [FunctionTool(fn) for fn in tool_functions.values()]
@@ -78,6 +83,7 @@ def create_agent(conn: BrowserConnection, vlm_model, viewport_info: dict, llm_mo
 
 async def handle_client(websocket, config: dict):
     """处理单个 WebSocket 客户端（Chrome 扩展）连接。"""
+    log.info("Client connected: %s", websocket.remote_address)
     conn = BrowserConnection()
     conn.set_ws(websocket)
 
@@ -92,15 +98,19 @@ async def handle_client(websocket, config: dict):
         """运行 Agent 并将结果流式推送回客户端。"""
         nonlocal agent_busy
         if agent_busy:
+            log.warning("Agent busy, rejecting message: %.50s", text)
             await websocket.send(json.dumps({"type": "stream", "content": "[BUSY] Agent 正在工作中..."}))
             return
         agent_busy = True
+        log.info("Agent request: %.100s", text)
         try:
-            async for evt in agent.reply_stream(UserMsg(name="user", content=text)):
+            async for evt in agent.reply_stream([UserMsg(name="user", content=text)]):
                 if evt.type == EventType.TEXT_BLOCK_DELTA:
                     await websocket.send(json.dumps({"type": "stream", "content": evt.delta}))
             await websocket.send(json.dumps({"type": "stream", "content": "[DONE]"}))
+            log.info("Agent completed successfully")
         except Exception as e:
+            log.error("Agent error: %s", e, exc_info=True)
             await websocket.send(json.dumps({"type": "error", "message": f"Agent error: {e}"}))
         finally:
             agent_busy = False
@@ -111,6 +121,7 @@ async def handle_client(websocket, config: dict):
                 msg = json.loads(raw_message)
                 validate_message(msg)
             except (json.JSONDecodeError, ValueError) as e:
+                log.warning("Invalid message from client: %s", e)
                 await websocket.send(json.dumps({"type": "error", "message": str(e)}))
                 continue
 
@@ -124,21 +135,25 @@ async def handle_client(websocket, config: dict):
 
             elif msg_type == "page_ready":
                 viewport_info.update(msg.get("viewport", {}))
+                log.debug("Page ready, viewport: %s", viewport_info)
 
             elif msg_type == "user_message":
+                log.info("User message received")
                 asyncio.create_task(run_agent(msg.get("content", "")))
 
     except websockets.ConnectionClosed:
-        pass
+        log.info("Client disconnected")
 
 
 async def main():
     """启动 WebSocket 服务器。"""
     config = load_config()
+    setup_logging(config)
+
     host = config.get("server", {}).get("host", "localhost")
     port = config.get("server", {}).get("port", 8765)
 
-    print(f"Starting Browser Use Agent server on ws://{host}:{port}")
+    log.info("Starting Browser Use Agent server on ws://%s:%d", host, port)
 
     async with websockets.serve(
         lambda ws: handle_client(ws, config),

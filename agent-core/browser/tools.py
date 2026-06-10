@@ -11,6 +11,9 @@ from agentscope.tool import ToolResponse
 from agentscope.message import TextBlock, UserMsg
 from agentscope.message._block import DataBlock, Base64Source
 from browser.connection import BrowserConnection
+from logger import get_logger
+
+log = get_logger("tools")
 
 
 class _CompatToolResponse(ToolResponse):
@@ -93,8 +96,10 @@ def create_browser_tools(
 
     async def screenshot_analyze() -> _CompatToolResponse:
         """截图并通过 VLM 模型分析。"""
+        log.info("Taking screenshot for VLM analysis")
         result = await conn.send_action({"action": "screenshot"})
         image_base64 = result.get("data", {}).get("image", "")
+        log.debug("Screenshot received, base64 length: %d", len(image_base64))
 
         vlm_msg = UserMsg(
             name="system",
@@ -108,6 +113,7 @@ def create_browser_tools(
             ],
         )
         response = await vlm_model(vlm_msg)
+        log.info("VLM analysis complete")
         return _CompatToolResponse(output=response.content)
 
     # --- CDP 降级工具 ---

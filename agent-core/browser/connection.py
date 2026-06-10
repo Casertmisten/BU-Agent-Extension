@@ -5,6 +5,10 @@ import asyncio
 import json
 from uuid import uuid4
 
+from logger import get_logger
+
+log = get_logger("connection")
+
 
 class BrowserConnection:
     """追踪挂起的工具指令，将结果路由回等待的调用者。"""
@@ -42,19 +46,25 @@ class BrowserConnection:
         future = loop.create_future()
         self._pending[task_id] = future
 
+        log.debug("Sending action: %s (task_id=%s)", action.get("action"), task_id)
         await self._ws.send(json.dumps(action))
-        return await future
+
+        result = await future
+        log.debug("Action result: %s status=%s", action.get("action"), result.get("status"))
+        return result
 
     def handle_result(self, msg: dict):
         """将结果消息路由到等待的 Future。"""
         task_id = msg.get("task_id")
         if task_id is None or task_id not in self._pending:
+            log.warning("Unknown task_id in result: %s", task_id)
             return
 
         future = self._pending.pop(task_id)
         if msg.get("status") == "success":
             future.set_result(msg)
         else:
+            log.error("Action failed: %s", msg.get("error", "Unknown error"))
             future.set_exception(Exception(msg.get("error", "Unknown error")))
 
     def update_viewport(self, viewport: dict):
