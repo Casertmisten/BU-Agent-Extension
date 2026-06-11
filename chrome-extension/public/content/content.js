@@ -94,15 +94,24 @@
 
   function enableOverlay() {
     if (overlay) return;
+    // 注入呼吸动画样式
+    if (!document.getElementById('__agent_overlay_style__')) {
+      var s = document.createElement('style');
+      s.id = '__agent_overlay_style__';
+      s.textContent = '@keyframes __agent_breath__ {' +
+        '0%, 100% { box-shadow: inset 0 0 30px rgba(34,197,94,0.25), 0 0 15px rgba(34,197,94,0.15); }' +
+        '50% { box-shadow: inset 0 0 60px rgba(34,197,94,0.45), 0 0 30px rgba(34,197,94,0.3); } }';
+      document.head.appendChild(s);
+    }
     overlay = document.createElement('div');
     overlay.id = '__agent_overlay__';
-    overlay.style.cssText = `
-      position: fixed; top: 0; left: 0;
-      width: 100vw; height: 100vh;
-      z-index: 999999;
-      background: rgba(0, 0, 0, 0.15);
-      pointer-events: auto;
-    `;
+    overlay.style.cssText =
+      'position:fixed;top:0;left:0;' +
+      'width:100vw;height:100vh;' +
+      'z-index:999999;' +
+      'background:transparent;' +
+      'pointer-events:auto;' +
+      'animation:__agent_breath__ 3s ease-in-out infinite;';
     document.body.appendChild(overlay);
   }
 
