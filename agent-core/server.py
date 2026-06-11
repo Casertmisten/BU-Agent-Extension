@@ -211,7 +211,7 @@ async def main():
     host = config.get("server", {}).get("host", "localhost")
     port = config.get("server", {}).get("port", 8765)
 
-    log.info("Starting Browser Use Agent server on ws://%s:%d", host, port)
+    log.info("Starting Browser Use Agent server on ws://%s:%s", host, port)
 
     async with websockets.serve(
         lambda ws: handle_client(ws, config),
