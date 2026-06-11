@@ -4,6 +4,9 @@
 import asyncio
 import json
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import websockets
 from agentscope.agent import Agent

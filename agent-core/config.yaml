@@ -1,17 +1,17 @@
 logging:
-  level: DEBUG
+  level: ${LOG_LEVEL:-DEBUG}
 
 llm:
-  provider: dashscope
-  model: glm-5.1
-  api_key: sk-ef7af9d9ab4b4abda79cd655deaed570
+  provider: ${LLM_PROVIDER:-dashscope}
+  model: ${LLM_MODEL:-glm-5.1}
+  api_key: ${LLM_API_KEY}
 
 vlm:
-  provider: dashscope
-  model: qwen3.6-35b-a3b
-  api_key: sk-ef7af9d9ab4b4abda79cd655deaed570
+  provider: ${VLM_PROVIDER:-dashscope}
+  model: ${VLM_MODEL:-qwen3.6-35b-a3b}
+  api_key: ${VLM_API_KEY}
 
 server:
-  host: localhost
-  port: 8765
-  heartbeat_interval: 30
+  host: ${SERVER_HOST:-localhost}
+  port: ${SERVER_PORT:-8765}
+  heartbeat_interval: ${HEARTBEAT_INTERVAL:-30}
