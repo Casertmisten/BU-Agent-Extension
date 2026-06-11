@@ -104,6 +104,10 @@ BU-Agent-Extension/
 │   ├── public/content/        # Content Script
 │   └── wxt.config.ts          # WXT 构建配置
 ├── agent-core/                # Python 后端
+│   ├── agent/                 # Agent 核心（BrowserAgent、模型工厂、提示词）
+│   │   ├── agent.py           # BrowserAgent 类：模型+工具+状态组合
+│   │   ├── model.py           # 模型工厂（openai/dashscope）
+│   │   └── prompts.py         # 系统提示词
 │   ├── server.py              # WebSocket 服务器入口
 │   ├── browser/               # 浏览器连接与工具（DOM 操作、截图等）
 │   ├── config_loader.py       # 配置加载
