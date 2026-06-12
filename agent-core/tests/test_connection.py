@@ -66,3 +66,31 @@ async def test_send_action_raises_when_no_ws():
     conn = BrowserConnection()
     with pytest.raises(RuntimeError, match="WebSocket not connected"):
         await conn.send_action({"action": "parse_dom"})
+
+
+@pytest.mark.asyncio
+async def test_disconnect_cancels_pending():
+    """断连时 pending Future 应该收到 ConnectionError。"""
+    mock_ws = AsyncMock()
+    conn = BrowserConnection()
+    conn.set_ws(mock_ws)
+
+    task = asyncio.create_task(conn.send_action({"action": "parse_dom"}))
+    await asyncio.sleep(0.01)
+
+    assert len(conn._pending) == 1
+    conn.disconnect()
+
+    with pytest.raises(ConnectionError, match="WebSocket 断开"):
+        await task
+
+    assert len(conn._pending) == 0
+    assert conn._ws is None
+
+
+@pytest.mark.asyncio
+async def test_disconnect_no_pending():
+    """没有 pending 请求时 disconnect 不报错。"""
+    conn = BrowserConnection()
+    conn.disconnect()  # 不应抛异常
+    assert len(conn._pending) == 0

@@ -34,9 +34,15 @@ def _get_or_create_agent(config: dict) -> BrowserAgent:
     return _agent
 
 
-async def _run_agent_and_send(agent: BrowserAgent, text: str, ws):
-    """运行 Agent 并将流式结果推送到 WebSocket。"""
+async def _run_agent_and_send(agent: BrowserAgent, text: str):
+    """运行 Agent 并将流式结果推送到当前活跃的 WebSocket。
+
+    使用 agent._current_ws 获取最新引用，确保重连后消息发到新 WS。
+    """
     async for event in agent.run(text):
+        ws = agent._current_ws
+        if ws is None:
+            break
         try:
             await ws.send(json.dumps(event))
         except Exception:
@@ -50,6 +56,10 @@ async def handle_client(websocket, config: dict):
     """
     agent = _get_or_create_agent(config)
     agent.attach_ws(websocket)
+
+    # 重连时通知前端之前的状态已丢失
+    if agent._busy:
+        log.warning("重连时 Agent 仍在执行，前端可能需要刷新状态")
 
     try:
         async for raw_message in websocket:
@@ -76,11 +86,12 @@ async def handle_client(websocket, config: dict):
             elif msg_type == "user_message":
                 log.info("收到用户消息")
                 asyncio.create_task(
-                    _run_agent_and_send(agent, msg.get("content", ""), websocket)
+                    _run_agent_and_send(agent, msg.get("content", ""))
                 )
 
     except websockets.ConnectionClosed:
-        log.info("客户端断开连接")
+        log.info("客户端断开连接，清理挂起的工具请求")
+        agent.conn.disconnect()
 
 
 async def main():

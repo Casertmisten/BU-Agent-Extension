@@ -22,6 +22,22 @@ class BrowserConnection:
         """设置活跃的 WebSocket 连接。"""
         self._ws = ws
 
+    def disconnect(self):
+        """WS 断开时清理所有挂起的 Future，防止永久阻塞。
+
+        所有正在等待 send_action 结果的协程会收到 ConnectionError。
+        """
+        if not self._pending:
+            return
+        log.info("清理 %d 个挂起的工具请求", len(self._pending))
+        for task_id, future in self._pending.items():
+            if not future.done():
+                future.set_exception(
+                    ConnectionError(f"WebSocket 断开，task_id={task_id}")
+                )
+        self._pending.clear()
+        self._ws = None
+
     async def send_action(self, action: dict) -> dict:
         """向 Chrome 扩展发送指令并等待结果。
 
@@ -33,6 +49,7 @@ class BrowserConnection:
 
         Raises:
             RuntimeError: WebSocket 未连接。
+            ConnectionError: 等待期间 WebSocket 断开。
             Exception: Chrome 扩展报告错误。
         """
         if self._ws is None:
