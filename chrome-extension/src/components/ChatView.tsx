@@ -1,4 +1,6 @@
 import { Send, Square } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { Message } from '@/types'
 import { ToolStepsPanel, ThinkingIndicator } from '@/components/EventCards'
@@ -147,8 +149,8 @@ function MessageBlock({ message, activityStatus }: { message: Message; activityS
       {/* Agent 内容气泡 */}
       {displayContent && (
         <div className="flex justify-start shrink-0">
-          <div className="max-w-[85%] rounded-xl rounded-bl-sm border bg-card px-3 py-2 text-xs whitespace-pre-wrap shadow-sm">
-            {displayContent}
+          <div className="max-w-[85%] rounded-xl rounded-bl-sm border bg-card px-3 py-2 text-xs prose prose-xs prose-sm:max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-pre:my-1 prose-headings:my-1 shadow-sm">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
           </div>
         </div>
       )}
