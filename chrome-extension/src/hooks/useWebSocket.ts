@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AgentEvent, BackgroundMessage, Message } from '@/types'
+import type { AgentEvent, ActivityStatus, BackgroundMessage, Message } from '@/types'
 
 export interface UseWebSocketReturn {
   status: 'connected' | 'disconnected'
@@ -9,6 +9,7 @@ export interface UseWebSocketReturn {
   stopStream: () => void
   error: string | null
   clearMessages: () => void
+  activityStatus: ActivityStatus
 }
 
 function uid(): string {
@@ -20,6 +21,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [messages, setMessages] = useState<Message[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activityStatus, setActivityStatus] = useState<ActivityStatus>('idle')
 
   const streamingRef = useRef<Message | null>(null)
 
@@ -51,6 +53,7 @@ export function useWebSocket(): UseWebSocketReturn {
             streaming.status = 'done'
             streamingRef.current = null
             setIsStreaming(false)
+            setActivityStatus('idle')
             setMessages((prev) => {
               // 移除之前的临时流式消息，加入最终版本
               const without = prev.filter((m) => m.id !== streaming.id)
@@ -106,9 +109,17 @@ export function useWebSocket(): UseWebSocketReturn {
       }
 
       if (message.type === 'event') {
+        const evt = message.event
+        if (!evt) return
+
+        if (evt.type === 'activity_status') {
+          setActivityStatus(evt.data?.status as ActivityStatus)
+          return
+        }
+
         const streaming = streamingRef.current
-        if (streaming && message.event) {
-          streaming.events = [...(streaming.events ?? []), message.event]
+        if (streaming) {
+          streaming.events = [...(streaming.events ?? []), evt]
         }
       }
     }
@@ -126,6 +137,7 @@ export function useWebSocket(): UseWebSocketReturn {
     }
     setMessages((prev) => [...prev, userMsg])
     setError(null)
+    setActivityStatus('idle')
     chrome.runtime.sendMessage({ type: 'user_message', content })
   }, [])
 
@@ -149,5 +161,5 @@ const clearMessages = useCallback(() => {
     setError(null)
   }, [])
 
-  return { status, sendTask, messages, isStreaming, stopStream, error, clearMessages }
+  return { status, sendTask, messages, isStreaming, stopStream, error, clearMessages, activityStatus }
 }
