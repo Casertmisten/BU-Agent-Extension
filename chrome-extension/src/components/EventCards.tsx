@@ -152,12 +152,12 @@ function RawSection({ input, output }: { input?: unknown; output?: unknown }) {
 }
 
 // --- 单个工具调用步骤 ---
-function StepCard({ event, stepNumber, reflection }: { event: AgentEvent; stepNumber: number; reflection?: { evaluation_previous_goal?: string; memory?: string; next_goal?: string } }) {
+function StepCard({ event, stepNumber, reflection, completed }: { event: AgentEvent; stepNumber: number; reflection?: { evaluation_previous_goal?: string; memory?: string; next_goal?: string }; completed?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const data = event.data
   const status = (data.status as string) || 'done'
   const action = (data.action as string) || ''
-  const isRunning = status === 'running'
+  const isRunning = !completed && status === 'running'
   const input = data.input
   const output = data.output as string | undefined
 
@@ -238,9 +238,33 @@ export function ActivityCard({ status }: { status: ActivityStatus }) {
   )
 }
 
+// 合并同一工具调用的 running + done 事件为一条
+function mergeStepEvents(events: AgentEvent[]): AgentEvent[] {
+  const result: AgentEvent[] = []
+  const pending = new Map<string, number>()
+  for (const event of events) {
+    if (event.type !== "step") { result.push(event); continue }
+    const action = (event.data.action as string) || ""
+    const status = (event.data.status as string) || "done"
+    if (status === "running") {
+      result.push(event)
+      pending.set(action, result.length - 1)
+    } else {
+      const idx = pending.get(action)
+      if (idx !== undefined) {
+        result[idx] = { ...result[idx], data: { ...result[idx].data, ...event.data } }
+        pending.delete(action)
+      } else {
+        result.push(event)
+      }
+    }
+  }
+  return result
+}
+
 // --- 事件流容器 ---
-export function EventStream({ events }: { events: AgentEvent[] }) {
-  const visible = events.filter(e => e.type !== 'activity_status')
+export function EventStream({ events, completed }: { events: AgentEvent[]; completed?: boolean }) {
+  const visible = mergeStepEvents(events.filter(e => e.type !== 'activity_status'))
   if (visible.length === 0) return null
 
   let stepCount = 0
@@ -257,7 +281,7 @@ export function EventStream({ events }: { events: AgentEvent[] }) {
           stepCount++
           const reflection = pendingReflection
           pendingReflection = undefined
-          return <StepCard key={i} event={event} stepNumber={stepCount} reflection={reflection} />
+          return <StepCard key={i} event={event} stepNumber={stepCount} reflection={reflection} completed={completed} />
         }
         if (event.type === 'error') {
           return (
@@ -281,6 +305,58 @@ export function EventStream({ events }: { events: AgentEvent[] }) {
         }
         return null
       })}
+    </div>
+  )
+}
+
+// --- 思考指示器 ---
+export function ThinkingIndicator() {
+  return (
+    <div className="flex items-center gap-2 px-1 py-1.5 shrink-0">
+      <div className="relative flex items-center justify-center">
+        <Sparkles className="size-3.5 text-blue-500" />
+        <span className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-blue-500 animate-ping" />
+      </div>
+      <span className="text-xs text-blue-500 font-medium">Agent 正在深度思考...</span>
+    </div>
+  )
+}
+
+// --- 工具步骤折叠面板 ---
+export function ToolStepsPanel({ events, isStreaming }: { events: AgentEvent[]; isStreaming?: boolean }) {
+  const [collapsed, setCollapsed] = useState(true)
+  const visible = events.filter(e => e.type !== 'activity_status')
+  const steps = visible.filter(e => e.type === 'step')
+
+  // 获取当前正在运行的步骤
+  const runningStep = steps.find(e => e.data.status === 'running')
+  const currentStepName = runningStep
+    ? toolDisplayName((runningStep.data.action as string) || '')
+    : isStreaming ? '思考中...' : ''
+
+  if (visible.length === 0) return null
+
+  return (
+    <div className="rounded-lg border bg-muted/30 overflow-hidden shrink-0">
+      <div
+        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors"
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <div className="flex items-center gap-1.5">
+          {collapsed
+            ? <ChevronRight className="size-3.5 text-muted-foreground" />
+            : <ChevronDown className="size-3.5 text-muted-foreground" />}
+          <span className="text-xs font-medium text-foreground">工具调用步骤 ({steps.length})</span>
+        </div>
+        {currentStepName && (
+          <span className="text-[11px] text-blue-500 font-medium">{currentStepName}</span>
+        )}
+      </div>
+      {!collapsed && (
+        <div className="px-2 pb-2">
+          <EventStream events={events} completed={!isStreaming} />
+        </div>
+      )}
     </div>
   )
 }

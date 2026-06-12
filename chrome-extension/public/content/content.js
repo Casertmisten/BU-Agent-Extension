@@ -113,6 +113,9 @@
 
   function enableOverlay() {
     if (overlay) return;
+    // 防止重复注入 content script 导致 overlay 变量丢失
+    var existing = document.getElementById('__agent_overlay__');
+    if (existing) { overlay = existing; return; }
     // 注入呼吸动画样式
     if (!document.getElementById('__agent_overlay_style__')) {
       var s = document.createElement('style');
