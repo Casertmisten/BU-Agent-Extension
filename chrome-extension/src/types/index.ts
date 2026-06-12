@@ -36,9 +36,17 @@ export interface Message {
 
 /** Agent 事件（事件卡片用） */
 export interface AgentEvent {
-  type: 'step' | 'observation' | 'error' | 'result' | 'retry' | 'activity'
+  type: 'step' | 'observation' | 'error' | 'result' | 'retry' | 'activity' | 'reflection' | 'activity_status'
   data: Record<string, unknown>
   timestamp: number
+}
+
+export type ActivityStatus = 'idle' | 'thinking' | 'executing' | 'retrying' | 'error' | 'done'
+
+export interface ReflectionData {
+  evaluation_previous_goal?: string
+  memory?: string
+  next_goal?: string
 }
 
 /** 会话（IndexedDB 持久化） */
