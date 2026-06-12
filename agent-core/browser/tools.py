@@ -126,14 +126,50 @@ def create_browser_tools(
         result = await conn.send_action({"action": "cdp_click", "x": css_x, "y": css_y})
         return _CompatToolResponse(output=f"CDP click ({css_x:.0f}, {css_y:.0f}): {result.get('status', 'unknown')}")
 
+    async def done(success: bool, text: str) -> _CompatToolResponse:
+        """标记任务完成并返回结果给用户。"""
+        return _CompatToolResponse(
+            output=json.dumps({"done": True, "success": success, "text": text})
+        )
+
+    async def extract_content(target_id: str = "") -> _CompatToolResponse:
+        """从当前页面或指定元素提取文本内容。"""
+        result = await conn.send_action({"action": "extract_content", "target_id": target_id})
+        return _CompatToolResponse(output=json.dumps(result.get("data", {}), ensure_ascii=False))
+
+    async def go_back() -> _CompatToolResponse:
+        """浏览器后退。"""
+        result = await conn.send_action({"action": "go_back"})
+        return _CompatToolResponse(output=f"Go back: {result.get('status', 'unknown')}")
+
+    async def switch_tab(tab_index: int) -> _CompatToolResponse:
+        """切换到指定索引的标签页。"""
+        result = await conn.send_action({"action": "switch_tab", "tab_index": tab_index})
+        return _CompatToolResponse(output=f"Switch to tab {tab_index}: {result.get('status', 'unknown')}")
+
+    async def scroll_element(target_id: str, direction: str = "down", pixels: int = 300) -> _CompatToolResponse:
+        """滚动指定可滚动元素。"""
+        result = await conn.send_action({
+            "action": "scroll_element",
+            "target_id": target_id,
+            "direction": direction,
+            "pixels": pixels,
+        })
+        return _CompatToolResponse(output=f"Scroll element {target_id}: {result.get('status', 'unknown')}")
+
     return {
         "parse_dom": parse_dom,
         "get_element_info": get_element_info,
         "click_element": click_element,
         "input_text": input_text,
         "scroll_page": scroll_page,
+        "scroll_element": scroll_element,
         "navigate": navigate,
+        "go_back": go_back,
+        "switch_tab": switch_tab,
+        "extract_content": extract_content,
         "wait": wait,
         "screenshot_analyze": screenshot_analyze,
         "cdp_click": cdp_click,
+        "done": done,
     }
