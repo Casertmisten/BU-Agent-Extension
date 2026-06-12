@@ -325,7 +325,7 @@ export function ThinkingIndicator() {
 // --- 工具步骤折叠面板 ---
 export function ToolStepsPanel({ events, isStreaming }: { events: AgentEvent[]; isStreaming?: boolean }) {
   const [collapsed, setCollapsed] = useState(true)
-  const visible = events.filter(e => e.type !== 'activity_status')
+  const visible = mergeStepEvents(events.filter(e => e.type !== 'activity_status'))
   const steps = visible.filter(e => e.type === 'step')
 
   // 当前运行的步骤；没有则取最后一个已完成步骤
