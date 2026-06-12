@@ -328,10 +328,11 @@ export function ToolStepsPanel({ events, isStreaming }: { events: AgentEvent[]; 
   const visible = events.filter(e => e.type !== 'activity_status')
   const steps = visible.filter(e => e.type === 'step')
 
-  // 获取当前正在运行的步骤
+  // 当前运行的步骤；没有则取最后一个已完成步骤
   const runningStep = steps.find(e => e.data.status === 'running')
-  const currentStepName = runningStep
-    ? toolDisplayName((runningStep.data.action as string) || '')
+  const lastStep = runningStep || steps[steps.length - 1]
+  const currentStepName = lastStep
+    ? toolDisplayName((lastStep.data.action as string) || '')
     : isStreaming ? '思考中...' : ''
 
   if (visible.length === 0) return null
@@ -349,7 +350,12 @@ export function ToolStepsPanel({ events, isStreaming }: { events: AgentEvent[]; 
           <span className="text-xs font-medium text-foreground">工具调用步骤 ({steps.length})</span>
         </div>
         {currentStepName && (
-          <span className="text-[11px] text-blue-500 font-medium">{currentStepName}</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-blue-500 font-medium">{currentStepName}</span>
+            {isStreaming
+              ? <Loader2 className="size-3.5 text-blue-500 animate-spin" />
+              : <CheckCircle className="size-3.5 text-green-500" />}
+          </div>
         )}
       </div>
       {!collapsed && (
@@ -360,6 +366,7 @@ export function ToolStepsPanel({ events, isStreaming }: { events: AgentEvent[]; 
     </div>
   )
 }
+
 
 // --- 向后兼容的 EventCard ---
 export function EventCard({ event }: { event: AgentEvent }) {
