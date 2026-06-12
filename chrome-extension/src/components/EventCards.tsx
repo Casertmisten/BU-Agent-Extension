@@ -189,13 +189,13 @@ function StepCard({ event, stepNumber, reflection }: { event: AgentEvent; stepNu
 
       {isRunning && <p className="text-[10px] text-muted-foreground mt-0.5">执行中...</p>}
 
-      {!isRunning && !expanded && input && (
+      {!isRunning && !expanded && !!input && (
         <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">{formatInputSummary(input)}</p>
       )}
 
       {expanded && (
         <div className="mt-1 space-y-0.5">
-          {input && (
+          {!!input && (
             <p className="text-[10px] text-muted-foreground/70">
               <span className="text-muted-foreground font-medium">参数: </span>
               <span className="break-all">{typeof input === 'string' ? input : JSON.stringify(input)}</span>
@@ -204,7 +204,7 @@ function StepCard({ event, stepNumber, reflection }: { event: AgentEvent; stepNu
           {output && (
             <p className="text-[10px] text-muted-foreground/70">
               <span className="text-muted-foreground font-medium">结果: </span>
-              <span className="break-all">{output}</span>
+              <span className="break-all">{String(output)}</span>
             </p>
           )}
           <RawSection input={input} output={output} />
