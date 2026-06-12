@@ -178,6 +178,15 @@ export default defineBackground(() => {
     if (message.type === 'get_status') {
       sendResponse({ connected: wsClient.isConnected() })
     }
+    if (message.type === 'stop') {
+      // 转发停止指令给后端 agent
+      wsClient.send({ type: 'stop' })
+      if (isStreamingActive) {
+        isStreamingActive = false
+        sendToContentScript({ action: 'disable_overlay' })
+      }
+      sendResponse({ stopped: true })
+    }
     return false
   })
 

@@ -23,6 +23,8 @@ log = get_logger("server")
 
 # 全局唯一的 Agent 实例
 _agent: BrowserAgent | None = None
+# 当前正在运行的 agent task，用于支持取消
+_current_task: asyncio.Task | None = None
 
 
 def _get_or_create_agent(config: dict) -> BrowserAgent:
@@ -85,9 +87,23 @@ async def handle_client(websocket, config: dict):
 
             elif msg_type == "user_message":
                 log.info("收到用户消息")
-                asyncio.create_task(
+                global _current_task
+                _current_task = asyncio.create_task(
                     _run_agent_and_send(agent, msg.get("content", ""))
                 )
+
+            elif msg_type == "stop":
+                if _current_task and not _current_task.done():
+                    _current_task.cancel()
+                    _current_task = None
+                    log.info("用户取消 Agent 任务")
+                    await websocket.send(json.dumps({"type": "stream", "content": "[DONE]"}))
+                    await websocket.send(json.dumps({
+                        "type": "event",
+                        "event": {"type": "activity_status", "data": {"status": "done"}},
+                    }))
+                else:
+                    log.debug("收到 stop 但无运行中的任务")
 
     except websockets.ConnectionClosed:
         log.info("客户端断开连接，清理挂起的工具请求")

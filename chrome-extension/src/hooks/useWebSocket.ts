@@ -152,6 +152,9 @@ export function useWebSocket(): UseWebSocketReturn {
       })
     }
     setIsStreaming(false)
+    setActivityStatus('idle')
+    // 通知 background 停止后端 agent
+    chrome.runtime.sendMessage({ type: 'stop' })
   }, [])
 
 const clearMessages = useCallback(() => {
