@@ -4,6 +4,9 @@
 以 Agent 为中心，组合模型、工具、状态等模块。
 """
 
+import json
+import re
+
 from agentscope.agent import Agent
 from agentscope.tool import Toolkit, FunctionTool
 from agentscope.message import UserMsg
@@ -55,8 +58,8 @@ class BrowserAgent:
         if self._agent is not None:
             return
 
-        llm_model = create_model(self._config["llm"])
-        vlm_model = create_model(self._config["vlm"])
+        llm_model = create_model(self._config["llm"], role="LLM")
+        vlm_model = create_model(self._config["vlm"], role="VLM")
 
         # 创建并注册浏览器工具
         tool_functions = create_browser_tools(
@@ -88,11 +91,27 @@ class BrowserAgent:
         else:
             log.info("WebSocket 已绑定")
 
+    @staticmethod
+    def _parse_reflection(text: str) -> dict | None:
+        """从 LLM 文本输出中提取 reflection JSON。"""
+        match = re.search(r'\{[^{}]*"evaluation_previous_goal"[^{}]*\}', text, re.DOTALL)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group())
+            return {
+                "evaluation_previous_goal": data.get("evaluation_previous_goal", ""),
+                "memory": data.get("memory", ""),
+                "next_goal": data.get("next_goal", ""),
+            }
+        except json.JSONDecodeError:
+            return None
+
     async def run(self, text: str):
         """执行用户指令，流式返回事件字典。
 
         Yields:
-            dict: 流式事件，包含 type 和 content/error 字段。
+            dict: 流式事件，包含 type 和 content/error/event 字段。
         """
         if self._busy:
             yield {"type": "stream", "content": "[BUSY] Agent 正在工作中..."}
@@ -100,17 +119,122 @@ class BrowserAgent:
 
         self._busy = True
         log.info("Agent 收到指令: %.100s", text)
+        _tool_calls: dict[str, dict] = {}
+        _step_index = 0
+        _text_buf = ""
+
         try:
+            # 推送初始 thinking 状态
+            yield {
+                "type": "event",
+                "event": {"type": "activity_status", "data": {"status": "thinking"}},
+            }
+
             async for evt in self._agent.reply_stream(
                 [UserMsg(name="user", content=text)]
             ):
                 log.debug("流式事件: type=%s", evt.type)
+
                 if evt.type == EventType.TEXT_BLOCK_DELTA:
+                    _text_buf += evt.delta
                     yield {"type": "stream", "content": evt.delta}
+
+                elif evt.type == EventType.TOOL_CALL_START:
+                    # 在工具调用前推送 reflection
+                    reflection = self._parse_reflection(_text_buf)
+                    if reflection:
+                        yield {
+                            "type": "event",
+                            "event": {"type": "reflection", "data": reflection, "timestamp": 0},
+                        }
+                    _text_buf = ""
+
+                    # 推送 executing 状态
+                    yield {
+                        "type": "event",
+                        "event": {"type": "activity_status", "data": {"status": "executing"}},
+                    }
+
+                    tid = evt.tool_call_id
+                    _tool_calls[tid] = {
+                        "name": evt.tool_call_name,
+                        "args_buf": "",
+                        "result_buf": "",
+                        "step": _step_index,
+                    }
+                    _step_index += 1
+                    yield {
+                        "type": "event",
+                        "event": {
+                            "type": "step",
+                            "data": {
+                                "action": evt.tool_call_name,
+                                "step": _tool_calls[tid]["step"],
+                                "status": "running",
+                            },
+                            "timestamp": 0,
+                        },
+                    }
+
+                elif evt.type == EventType.TOOL_CALL_DELTA:
+                    tc = _tool_calls.get(evt.tool_call_id)
+                    if tc:
+                        tc["args_buf"] += evt.delta
+
+                elif evt.type == EventType.TOOL_RESULT_TEXT_DELTA:
+                    tc = _tool_calls.get(evt.tool_call_id)
+                    if tc:
+                        tc["result_buf"] += evt.delta
+
+                elif evt.type == EventType.TOOL_RESULT_END:
+                    tc = _tool_calls.get(evt.tool_call_id)
+                    if tc:
+                        try:
+                            parsed_args = json.loads(tc["args_buf"]) if tc["args_buf"] else {}
+                        except (json.JSONDecodeError, TypeError):
+                            parsed_args = tc["args_buf"]
+                        status = "done" if str(evt.state) == "success" else "error"
+                        yield {
+                            "type": "event",
+                            "event": {
+                                "type": "step",
+                                "data": {
+                                    "action": tc["name"],
+                                    "step": tc["step"],
+                                    "status": status,
+                                    "input": parsed_args,
+                                    "output": tc["result_buf"],
+                                },
+                                "timestamp": 0,
+                            },
+                        }
+
+                    # 工具调用结束后推送 thinking 状态
+                    yield {
+                        "type": "event",
+                        "event": {"type": "activity_status", "data": {"status": "thinking"}},
+                    }
+
+            # 流式结束后推送最终 reflection
+            reflection = self._parse_reflection(_text_buf)
+            if reflection:
+                yield {
+                    "type": "event",
+                    "event": {"type": "reflection", "data": reflection, "timestamp": 0},
+                }
+
             yield {"type": "stream", "content": "[DONE]"}
+            yield {
+                "type": "event",
+                "event": {"type": "activity_status", "data": {"status": "done"}},
+            }
             log.info("Agent 执行完成")
         except Exception as e:
             log.error("Agent 执行错误: %s", e, exc_info=True)
+            yield {
+                "type": "event",
+                "event": {"type": "activity_status", "data": {"status": "error"}},
+            }
             yield {"type": "error", "message": f"Agent error: {e}"}
         finally:
             self._busy = False
