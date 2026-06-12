@@ -1,7 +1,7 @@
 import { Send, Square } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Message } from '@/types'
-import { ActivityCard, EventCard } from '@/components/EventCards'
+import { ActivityCard, EventStream } from '@/components/EventCards'
 import { EmptyState } from '@/components/misc'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,9 +16,10 @@ interface ChatViewProps {
   isStreaming: boolean
   sendTask: (content: string) => void
   stopStream: () => void
+  activityStatus: string
 }
 
-export function ChatView({ messages, isStreaming, sendTask, stopStream }: ChatViewProps) {
+export function ChatView({ messages, isStreaming, sendTask, stopStream, activityStatus }: ChatViewProps) {
   const [inputValue, setInputValue] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -56,7 +57,7 @@ export function ChatView({ messages, isStreaming, sendTask, stopStream }: ChatVi
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
-        {isStreaming && <ActivityCard />}
+        {isStreaming && <ActivityCard status={activityStatus as any} />}
       </div>
 
       {/* 输入区域 */}
@@ -105,7 +106,7 @@ export function ChatView({ messages, isStreaming, sendTask, stopStream }: ChatVi
 function MessageBubble({ message }: { message: Message }) {
   if (message.role === 'user') {
     return (
-      <div className="flex justify-end">
+      <div className="flex justify-end shrink-0">
         <div className="max-w-[85%] rounded-xl rounded-br-sm bg-gradient-to-br from-emerald-500 to-emerald-600 text-white px-3 py-2 text-xs whitespace-pre-wrap shadow-sm">
           {message.content}
         </div>
@@ -115,21 +116,23 @@ function MessageBubble({ message }: { message: Message }) {
 
   if (message.role === 'system') {
     return (
-      <div className="text-center text-[11px] text-muted-foreground py-1">{message.content}</div>
+      <div className="text-center text-[11px] text-muted-foreground py-1 shrink-0">{message.content}</div>
     )
   }
 
   // agent 消息
+  // 清理 LLM 输出：统一换行符，连续换行压为单个，去掉首尾空白
+  const displayContent = message.content
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/^\n+/, '')
+    .trimEnd()
   return (
-    <div className="flex justify-start">
+    <div className="flex justify-start shrink-0">
       <div className="max-w-[85%] rounded-xl rounded-bl-sm border bg-card px-3 py-2 text-xs whitespace-pre-wrap shadow-sm">
-        {message.content}
+        {displayContent}
         {message.events && message.events.length > 0 && (
-          <div className="mt-2 space-y-2">
-            {message.events.map((ev, i) => (
-              <EventCard key={i} event={ev} />
-            ))}
-          </div>
+          <EventStream events={message.events} />
         )}
       </div>
     </div>

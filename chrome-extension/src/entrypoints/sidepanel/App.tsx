@@ -12,7 +12,7 @@ import { saveSession } from '@/lib/idb'
 
 export default function App() {
   const [view, setView] = useState<View>({ name: 'chat' })
-  const { status, sendTask, messages, isStreaming, stopStream, clearMessages } = useWebSocket()
+  const { status, sendTask, messages, isStreaming, stopStream, clearMessages, activityStatus } = useWebSocket()
   const { config, saveConfig } = useConfig()
   const prevStreamingRef = useRef(isStreaming)
 
@@ -92,7 +92,7 @@ export default function App() {
       </header>
 
 
-      <ChatView messages={messages} isStreaming={isStreaming} sendTask={sendTask} stopStream={stopStream} />
+      <ChatView messages={messages} isStreaming={isStreaming} sendTask={sendTask} stopStream={stopStream} activityStatus={activityStatus} />
 
       <footer className="text-center py-1.5 text-[11px] text-muted-foreground border-t">
         版本 v0.2.0
