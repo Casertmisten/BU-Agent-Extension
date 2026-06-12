@@ -88,6 +88,25 @@
     return { success: true };
   }
 
+
+  function scrollElement(targetId, direction, pixels) {
+    var el = document.querySelector('[backend-id="' + targetId + '"]');
+    if (!el) return { success: false, error: 'Element ' + targetId + ' not found' };
+    var x = direction === 'left' ? -pixels : direction === 'right' ? pixels : 0;
+    var y = direction === 'up' ? -pixels : direction === 'down' ? pixels : 0;
+    el.scrollBy(x, y);
+    return { success: true };
+  }
+
+  function extractContent(targetId) {
+    if (targetId) {
+      var el = document.querySelector('[backend-id="' + targetId + '"]');
+      if (!el) return { success: false, error: 'Element ' + targetId + ' not found' };
+      return { success: true, data: { text: (el.textContent || '').trim(), html: el.innerHTML } };
+    }
+    return { success: true, data: { text: (document.body.textContent || '').trim().slice(0, 5000), title: document.title, url: window.location.href } };
+  }
+
   // --- Overlay ---
 
   let overlay = null;
@@ -157,6 +176,12 @@
             break;
           case 'scroll':
             result = scrollPage(message.direction, message.pixels);
+            break;
+          case 'scroll_element':
+            result = scrollElement(message.target_id, message.direction, message.pixels);
+            break;
+          case 'extract_content':
+            result = extractContent(message.target_id);
             break;
           case 'enable_overlay':
             enableOverlay();

@@ -32,7 +32,6 @@ function ToolIcon({ name, className }: { name: string; className?: string }) {
     done: <CheckCircle className={className} />,
     extract_content: <Search className={className} />,
     go_back: <Globe className={className} />,
-    switch_tab: <Globe className={className} />,
     scroll_element: <MoveVertical className={className} />,
   }
   return icons[name] || <Zap className={className} />
@@ -53,7 +52,6 @@ function toolDisplayName(name: string): string {
     done: '完成任务',
     extract_content: '提取内容',
     go_back: '后退',
-    switch_tab: '切换标签',
     scroll_element: '滚动元素',
   }
   return map[name] || name

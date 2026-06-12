@@ -40,6 +40,9 @@ export default defineBackground(() => {
         sendToContentScript({ action: 'disable_overlay' })
       }
       chrome.runtime.sendMessage(msg).catch(() => {})
+    } else if (type === 'event') {
+      // 转发 agent 事件（step/reflection/activity_status）到 sidepanel
+      chrome.runtime.sendMessage(msg).catch(() => {})
     } else if (type === 'error') {
       // 出错时也关闭遮罩
       if (isStreamingActive) {
@@ -63,12 +66,13 @@ export default defineBackground(() => {
     try {
       let result
       switch (action) {
-        case 'parse_dom': case 'get_element_info': case 'click': case 'input_text': case 'scroll':
+        case 'parse_dom': case 'get_element_info': case 'click': case 'input_text': case 'scroll': case 'scroll_element': case 'extract_content':
           result = await executeInContentScript(msg); break
         case 'screenshot': result = await handleScreenshot(); break
         case 'navigate': result = await handleNavigate(msg.url as string); break
         case 'wait': result = await handleWait((msg.seconds as number) || 2); break
         case 'cdp_click': result = await handleCdpClick(msg.x as number, msg.y as number); break
+        case 'go_back': result = await handleGoBack(); break
         default: result = { status: 'error', error: `Unknown action: ${action}` }
       }
       wsClient.send({ type: 'result', task_id, status: (result as any).status || 'success', data: (result as any).data || {}, error: (result as any).error || '' })
@@ -117,7 +121,7 @@ export default defineBackground(() => {
     const tab = await getActiveTab()
     if (!tab) return { status: 'error', error: 'No active tab' }
     return new Promise<Record<string, unknown>>((resolve) => {
-      const listener = (id: number, info: chrome.tabs.TabChangeInfo) => {
+      const listener = (id: number, info: any) => {
         if (id === tab.id && info.status === 'complete') {
           chrome.tabs.onUpdated.removeListener(listener)
           injectContentScript(tab.id!).then(() => resolve({ status: 'success', data: { url: info.url || url } }))
@@ -132,6 +136,22 @@ export default defineBackground(() => {
   async function handleWait(seconds: number) {
     await new Promise((r) => setTimeout(r, seconds * 1000))
     return { status: 'success', data: {} }
+  }
+
+  async function handleGoBack() {
+    const tab = await getActiveTab()
+    if (!tab) return { status: 'error', error: 'No active tab' }
+    return new Promise<Record<string, unknown>>((resolve) => {
+      const listener = (id: number, info: any) => {
+        if (id === tab.id && info.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(listener)
+          resolve({ status: 'success', data: {} })
+        }
+      }
+      chrome.tabs.onUpdated.addListener(listener)
+      chrome.tabs.goBack(tab.id!)
+      setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve({ status: 'error', error: 'Go back timeout' }) }, 10_000)
+    })
   }
 
   async function handleCdpClick(x: number, y: number) {

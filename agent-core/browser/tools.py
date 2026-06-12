@@ -142,11 +142,6 @@ def create_browser_tools(
         result = await conn.send_action({"action": "go_back"})
         return _CompatToolResponse(output=f"Go back: {result.get('status', 'unknown')}")
 
-    async def switch_tab(tab_index: int) -> _CompatToolResponse:
-        """切换到指定索引的标签页。"""
-        result = await conn.send_action({"action": "switch_tab", "tab_index": tab_index})
-        return _CompatToolResponse(output=f"Switch to tab {tab_index}: {result.get('status', 'unknown')}")
-
     async def scroll_element(target_id: str, direction: str = "down", pixels: int = 300) -> _CompatToolResponse:
         """滚动指定可滚动元素。"""
         result = await conn.send_action({
@@ -166,7 +161,6 @@ def create_browser_tools(
         "scroll_element": scroll_element,
         "navigate": navigate,
         "go_back": go_back,
-        "switch_tab": switch_tab,
         "extract_content": extract_content,
         "wait": wait,
         "screenshot_analyze": screenshot_analyze,
