@@ -9,6 +9,8 @@ MSG_TYPES = frozenset({
     "stream",        # Agent → 扩展：Agent 文本回复
     "mode_change",   # SidePanel → 扩展：AI/人工模式切换
     "user_message",  # SidePanel → Agent：用户聊天输入
+    "browser_state", # 扩展 → Agent：浏览器状态快照（标签页、URL、可交互元素）
+    "tab_change",    # 扩展 → Agent：标签页变化通知
 })
 
 
