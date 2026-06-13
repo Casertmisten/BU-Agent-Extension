@@ -175,10 +175,13 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [])
 
 const clearMessages = useCallback(() => {
+    // 通知后端开新会话（重置上下文）；停旧任务的职责由后端 new_session 分支承担
+    chrome.runtime.sendMessage({ type: 'new_session' })
     setMessages([])
     streamingRef.current = null
     setIsStreaming(false)
     setError(null)
+    setActivityStatus('idle')
   }, [])
 
   return { status, sendTask, messages, isStreaming, stopStream, error, clearMessages, activityStatus }
