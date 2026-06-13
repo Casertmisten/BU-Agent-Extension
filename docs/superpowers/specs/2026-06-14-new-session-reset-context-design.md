@@ -24,31 +24,28 @@ Chrome 扩展 sidepanel 顶部有"新建会话"按钮（`entrypoints/sidepanel/A
 
 #### 1. `agent/agent.py` — 新增 `reset_context()` 方法
 
-顶部需补 `import uuid`（当前未导入）。在 `BrowserAgent` 类内新增：
+在 `BrowserAgent` 类内新增。**实现为重建 Agent 实例（而非清空 state）**，原因是隔离 orphan 工具污染（见"竞态处理"）：
 
 ```python
 def reset_context(self) -> None:
-    """清空对话历史，开启全新上下文。
-
-    保留 Agent 实例与已注册工具，仅重置会话状态。
-    permission_context 保留（用户级工具授权，跨会话有效）。
-    """
+    """新建会话：重建 Agent 实例以彻底隔离上下文。"""
     if self._agent is not None:
-        st = self._agent.state
-        st.context.clear()
-        st.summary = ""
-        st.session_id = uuid.uuid4().hex
-        st.cur_iter = 0
-        # ToolContext/TaskContext 是 pydantic BaseModel（非 list），用同类型默认实例替换
-        st.tool_context = type(st.tool_context)()
-        st.tasks_context = type(st.tasks_context)()
+        old = self._agent
+        self._agent = Agent(
+            name="browser_agent",
+            system_prompt=SYSTEM_PROMPT,
+            model=old.model,        # 复用（重资产，不重新加载）
+            toolkit=old.toolkit,    # 复用（不重新注册工具）
+            state=AgentState(
+                permission_context=old.state.permission_context,  # 保留用户级授权
+            ),
+        )
 ```
 
-清理范围（用户已确认）：
-- `context`、`summary`、`cur_iter`：对话历史与压缩摘要、迭代计数 — **清**。
-- `tool_context`、`tasks_context`：上一轮工具/任务状态（pydantic `BaseModel`，非 `list`）— **换新空实例**（用户确认一并清空）。
-- `session_id`：**换新**。
-- `permission_context`：**保留**（用户级 `PermissionMode.BYPASS` 等授权跨会话有效）。
+- `Agent.__init__` 轻量（存属性 + 建 `PermissionEngine`，无网络/无工具注册），重建开销小。
+- `model`/`toolkit` 复用旧实例（`init()` 时创建的重资产），不重新加载。
+- `state` 全新（空 context、新 session_id、空 tool/tasks context）。
+- `permission_context` 保留（用户级 `PermissionMode.BYPASS` 等授权跨会话有效）。
 
 #### 2. `server.py` — 消息分发新增 `new_session` 分支
 
@@ -61,8 +58,8 @@ elif msg_type == "new_session":
         _current_task.cancel()
         try:
             await _current_task          # 确保旧任务彻底结束，避免残留 append 污染新上下文
-        except BaseException:
-            pass
+        except (asyncio.CancelledError, Exception):
+            pass  # 丢弃旧任务的取消/异常，不阻断新建会话；不吞 KeyboardInterrupt/SystemExit
         _current_task = None
         # 旧任务被打断，通知前端关闭遮罩
         await websocket.send(json.dumps({
@@ -135,9 +132,17 @@ if (message.type === 'new_session') {
 
 ## 竞态处理（核心）
 
-agentscope 的 `reply_stream` 在执行中会通过 `_handle_incoming_messages` 把消息 append 进 `state.context`。若 `reset_context` 在旧任务仍在 append 时执行，reset 之后旧任务的遗留 append 会污染新上下文。
+两层问题：
 
-规避：`new_session` 分支对旧任务做 `cancel()` + `await`（吞掉 `CancelledError` 及其它异常），确保旧任务所有 append 已完成后，再 `reset_context` 清空。`await` 期间阻塞该连接的消息循环是可接受的（单用户、低频操作、旧任务通常很快收敛）。
+**第一层：reply_stream 主循环的 append。** agentscope 的 `reply_stream` 通过 `_handle_incoming_messages` 把消息 append 进 `state.context`。`new_session` 分支对旧任务 `cancel()` + `await`（吞掉 `CancelledError` 及其它异常），确保 reply_stream 主循环结束。
+
+**第二层：orphan 工具 task（关键）。** agentscope 的工具调用在独立的 `gather_task`（`asyncio.create_task(_run_all())`，`_agent.py:1248`）中执行，`reply_stream` 只通过 queue 消费事件，**cancel 不级联到 `gather_task`**。因此 cancel + await 只结束 reply_stream 主循环，工具（如 VLM 分析）作为 orphan task 继续运行，完成后通过 `_save_to_context`（`_agent.py:1507`）写 `self.state.context`。
+
+若 `reset_context` 仅清空 state，orphan 写的是同一 state 对象 → **污染新会话**（用户实测：流式中途新建会话后，旧 VLM 分析结果仍被写入已清空的 context）。
+
+规避：`reset_context` **重建 Agent 实例**。orphan 工具 task 持有旧 Agent 引用（bound method 的 self 绑定），写入旧 Agent 的 state（随旧实例被丢弃）；新 Agent 的 state 全新且干净。
+
+代价：orphan 工具调用（如 VLM）仍会跑完（资源浪费），但结果不污染新会话。彻底取消 orphan 需 patch agentscope（追踪并 cancel `gather_task`），属框架限制，暂不处理。
 
 之所以不沿用"前端先 `stop` 再 `new_session`"：`stop` 分支（`server.py:95-106`）cancel 后不 await 且立即 `_current_task = None`，新 `new_session` 分支拿不到旧 task 引用，无法保证其结束。统一由 `new_session` 分支处理停旧任务，单一路径，无竞态。
 
@@ -153,7 +158,7 @@ agentscope 的 `reply_stream` 在执行中会通过 `_handle_incoming_messages` 
 
 | 文件 | 改动 |
 |---|---|
-| `agent-core/agent/agent.py` | 补 `import uuid`；新增 `reset_context()` |
+| `agent-core/agent/agent.py` | 新增 `reset_context()`（重建 Agent 实例，隔离 orphan 污染） |
 | `agent-core/server.py` | `handle_client` 新增 `new_session` 分支 |
 | `agent-core/browser/protocol.py` | `MSG_TYPES` 加 `"new_session"` |
 | `chrome-extension/src/hooks/useWebSocket.ts` | `clearMessages` 发 `new_session` + 重置 activityStatus |
