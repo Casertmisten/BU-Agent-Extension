@@ -42,5 +42,9 @@ def test_reject_missing_type():
 
 
 def test_msg_types_complete():
-    expected = {"action", "result", "heartbeat", "page_ready", "stream", "mode_change", "user_message", "browser_state", "tab_change"}
+    expected = {"action", "result", "heartbeat", "page_ready", "stream", "mode_change", "user_message", "stop", "new_session", "browser_state", "tab_change"}
     assert expected == MSG_TYPES
+
+
+def test_validate_new_session():
+    assert validate_message({"type": "new_session"}) is True
