@@ -190,31 +190,27 @@ async def test_parse_reflection():
     assert agent._parse_reflection("") is None
 
 
-def test_reset_context_clears_state():
-    """新建会话：清历史、换 session_id、换新 tool/tasks context，保留 permission。"""
-    from types import SimpleNamespace
-    from agentscope.state import AgentState
+def test_reset_context_rebuilds_agent():
+    """新建会话：重建 Agent 实例，state 全新（空 context、新 session_id），permission 保留。"""
     from agentscope.message import UserMsg
 
     agent = BrowserAgent(_make_config())
-    # 不调 init()，直接注入一个带真实 AgentState 的 _agent，聚焦 reset_context 本身
-    agent._agent = SimpleNamespace(state=AgentState())
-    st = agent._agent.state
-    st.context.append(UserMsg(name="user", content="旧消息"))
-    st.summary = "旧摘要"
-    st.cur_iter = 5
-    st.tool_context.activated_groups.append("group_a")
-    old_sid = st.session_id
+    agent.init()
+    old = agent._agent
+    old.state.context.append(UserMsg(name="user", content="旧消息"))
+    old.state.summary = "旧摘要"
+    old.state.cur_iter = 5
+    old_permission = old.state.permission_context
 
     agent.reset_context()
 
-    assert st.context == []
-    assert st.summary == ""
-    assert st.cur_iter == 0
-    assert st.session_id != old_sid
-    assert st.tool_context.activated_groups == []
-    # permission_context 保留（用户级授权跨会话有效）
-    assert st.permission_context is not None
+    new = agent._agent
+    assert new is not old                       # 重建为新实例
+    assert new.state.context == []              # 全新空 context
+    assert new.state.summary == ""
+    assert new.state.cur_iter == 0
+    assert new.state.session_id != old.state.session_id
+    assert new.state.permission_context is old_permission  # permission 保留（同一对象）
 
 
 def test_reset_context_no_agent_is_noop():
@@ -222,3 +218,27 @@ def test_reset_context_no_agent_is_noop():
     agent = BrowserAgent(_make_config())
     agent.reset_context()  # self._agent is None，不应抛错
     assert agent._agent is None
+
+
+def test_reset_context_isolates_orphan_tool_writes():
+    """orphan 工具 task 完成后写旧 Agent.state，不得污染新会话的 Agent.state。
+
+    复现 bug：agentscope 工具在独立 gather_task 中执行，cancel 不级联，orphan
+    工具完成后会 _save_to_context 写 state.context。仅清空 state 时 orphan 写
+    同一对象会污染；重建 Agent 实例后 orphan 写旧 state，新 state 保持干净。
+    """
+    from agentscope.message import UserMsg
+
+    agent = BrowserAgent(_make_config())
+    agent.init()
+    old = agent._agent  # 持有旧 Agent 引用（模拟 orphan 工具 task 的 self 绑定）
+
+    agent.reset_context()
+    new = agent._agent
+    assert new is not old  # 重建为新实例，而非清空同一对象
+
+    # 模拟 orphan 工具 task 完成后写旧 Agent 的 state（_save_to_context 行为）
+    old.state.context.append(UserMsg(name="assistant", content="旧工具结果"))
+
+    # 新会话的 state 不受 orphan 写入影响
+    assert new.state.context == []

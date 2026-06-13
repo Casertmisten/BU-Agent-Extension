@@ -6,7 +6,6 @@
 
 import json
 import re
-import uuid
 
 from agentscope.agent import Agent
 from agentscope.tool import Toolkit, FunctionTool
@@ -83,20 +82,29 @@ class BrowserAgent:
         log.info("BrowserAgent 初始化完成，挂载 %d 个工具", len(tool_functions))
 
     def reset_context(self) -> None:
-        """清空对话历史，开启全新上下文。
+        """新建会话：重建 Agent 实例以彻底隔离上下文。
 
-        保留 Agent 实例与已注册工具，仅重置会话状态。
-        permission_context 保留（用户级工具授权，跨会话有效）。
+        agentscope 的工具调用在独立的 gather_task（asyncio.create_task）中执行，
+        _current_task.cancel() 不会级联到它。若仅清空 state.context，正在运行的
+        orphan 工具（如 VLM 分析）完成后会通过 _save_to_context 把旧工具结果写回
+        已被清空的 context，污染新会话。重建 Agent 实例后，orphan 仍持有旧 Agent
+        引用（self 绑定），写入旧 state（随旧实例被丢弃），新 Agent 的 state 全新
+        且干净。
+
+        model/toolkit 为重资产，复用旧实例（不重新加载/不重新注册）；
+        permission_context 保留（用户级工具授权跨会话有效）。
         """
         if self._agent is not None:
-            st = self._agent.state
-            st.context.clear()
-            st.summary = ""
-            st.session_id = uuid.uuid4().hex
-            st.cur_iter = 0
-            # ToolContext/TaskContext 是 pydantic BaseModel（非 list），用同类型默认实例替换
-            st.tool_context = type(st.tool_context)()
-            st.tasks_context = type(st.tasks_context)()
+            old = self._agent
+            self._agent = Agent(
+                name="browser_agent",
+                system_prompt=SYSTEM_PROMPT,
+                model=old.model,
+                toolkit=old.toolkit,
+                state=AgentState(
+                    permission_context=old.state.permission_context,
+                ),
+            )
 
     def attach_ws(self, ws):
         """绑定 WebSocket 连接（支持重连）。"""
