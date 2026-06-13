@@ -92,6 +92,23 @@ async def handle_client(websocket, config: dict):
                     _run_agent_and_send(agent, msg.get("content", ""))
                 )
 
+            elif msg_type == "new_session":
+                had_running = _current_task is not None and not _current_task.done()
+                if had_running:
+                    _current_task.cancel()
+                    try:
+                        await _current_task  # 确保旧任务彻底结束，避免残留 append 污染新上下文
+                    except BaseException:
+                        pass
+                    _current_task = None
+                    # 旧任务被打断，通知前端关闭遮罩
+                    await websocket.send(json.dumps({
+                        "type": "event",
+                        "event": {"type": "activity_status", "data": {"status": "done"}},
+                    }))
+                agent.reset_context()
+                log.info("已新建会话，上下文已重置")
+
             elif msg_type == "stop":
                 if _current_task and not _current_task.done():
                     _current_task.cancel()
