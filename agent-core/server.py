@@ -98,8 +98,8 @@ async def handle_client(websocket, config: dict):
                     _current_task.cancel()
                     try:
                         await _current_task  # 确保旧任务彻底结束，避免残留 append 污染新上下文
-                    except BaseException:
-                        pass
+                    except (asyncio.CancelledError, Exception):
+                        pass  # 丢弃旧任务的取消/异常，不阻断新建会话；不吞 KeyboardInterrupt/SystemExit
                     _current_task = None
                     # 旧任务被打断，通知前端关闭遮罩
                     await websocket.send(json.dumps({
