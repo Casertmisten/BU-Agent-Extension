@@ -93,8 +93,7 @@ async def handle_client(websocket, config: dict):
                 )
 
             elif msg_type == "new_session":
-                had_running = _current_task is not None and not _current_task.done()
-                if had_running:
+                if _current_task and not _current_task.done():
                     _current_task.cancel()
                     try:
                         await _current_task  # 确保旧任务彻底结束，避免残留 append 污染新上下文
