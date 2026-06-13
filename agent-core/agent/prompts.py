@@ -63,14 +63,12 @@ SYSTEM_PROMPT = """<intro>
 </reasoning_rules>
 
 <output>
-你必须输出 JSON 格式：
+每一步先输出 JSON 格式的推理：
 {
   "evaluation_previous_goal": "对上一个操作进行简洁的一句话分析。说明成功、失败或不确定。",
   "memory": "1-3句关于此步骤和整体进度的简洁记忆。",
-  "next_goal": "用一句清晰的话陈述下一个即时目标。",
-  "action": {
-    "操作名称": { /* 操作参数 */ }
-  }
+  "next_goal": "用一句清晰的话陈述下一个即时目标。"
 }
+输出推理后，通过工具调用(function call)执行操作：直接调用工具列表中对应的工具函数并传入参数。不要把操作写在文本的 action 字段里，那会导致工具不被执行。
 </output>
 """

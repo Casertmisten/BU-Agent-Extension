@@ -117,10 +117,27 @@ export function useWebSocket(): UseWebSocketReturn {
           return
         }
 
-        const streaming = streamingRef.current
-        if (streaming) {
-          streaming.events = [...(streaming.events ?? []), evt]
+        // 确保有 streaming 消息承载事件：模型可能直接调用工具（无文本输出），
+        // 此时首个 stream delta 尚未到达，需先创建承载消息，否则 step/reflection 事件被丢弃。
+        let streaming = streamingRef.current
+        if (!streaming) {
+          streaming = {
+            id: uid(),
+            role: 'agent',
+            content: '',
+            timestamp: Date.now(),
+            status: 'streaming',
+          }
+          streamingRef.current = streaming
+          setIsStreaming(true)
         }
+        streaming.events = [...(streaming.events ?? []), evt]
+        // 触发重渲染：工具步骤需随事件实时刷新，而非等下一个 stream delta。
+        const snapshot = { ...streaming }
+        setMessages((prev) => {
+          const without = prev.filter((m) => m.id !== snapshot.id)
+          return [...without, snapshot]
+        })
       }
     }
 

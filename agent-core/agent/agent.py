@@ -92,20 +92,26 @@ class BrowserAgent:
             log.info("WebSocket 已绑定")
 
     @staticmethod
-    def _parse_reflection(text: str) -> dict | None:
-        """从 LLM 文本输出中提取 reflection JSON。"""
+    def _drain_reflection(text: str) -> tuple[dict | None, str]:
+        """从文本中分离 reflection JSON 与剩余回复文本。
+
+        reflection 只显示在工具步骤卡片，不应进入回复气泡；剩余文本作为给用户的回复。
+        返回 (reflection_dict 或 None, remaining_text)。
+        """
         match = re.search(r'\{[^{}]*"evaluation_previous_goal"[^{}]*\}', text, re.DOTALL)
         if not match:
-            return None
+            return None, text
         try:
             data = json.loads(match.group())
-            return {
-                "evaluation_previous_goal": data.get("evaluation_previous_goal", ""),
-                "memory": data.get("memory", ""),
-                "next_goal": data.get("next_goal", ""),
-            }
         except json.JSONDecodeError:
-            return None
+            return None, text
+        reflection = {
+            "evaluation_previous_goal": data.get("evaluation_previous_goal", ""),
+            "memory": data.get("memory", ""),
+            "next_goal": data.get("next_goal", ""),
+        }
+        remaining = (text[:match.start()] + text[match.end():]).strip()
+        return reflection, remaining
 
     async def run(self, text: str):
         """执行用户指令，流式返回事件字典。
@@ -133,20 +139,21 @@ class BrowserAgent:
             async for evt in self._agent.reply_stream(
                 [UserMsg(name="user", content=text)]
             ):
-                log.debug("流式事件: type=%s", evt.type)
-
                 if evt.type == EventType.TEXT_BLOCK_DELTA:
+                    # 缓冲文本，不立即推送：需在工具调用/流结束时区分 reflection（进步骤卡片）
+                    # 与回复文本（进气泡），避免 reflection JSON 显示在回复气泡
                     _text_buf += evt.delta
-                    yield {"type": "stream", "content": evt.delta}
 
                 elif evt.type == EventType.TOOL_CALL_START:
-                    # 在工具调用前推送 reflection
-                    reflection = self._parse_reflection(_text_buf)
+                    # 在工具调用前分离 reflection 与回复文本
+                    reflection, remaining = self._drain_reflection(_text_buf)
                     if reflection:
                         yield {
                             "type": "event",
                             "event": {"type": "reflection", "data": reflection, "timestamp": 0},
                         }
+                    if remaining:
+                        yield {"type": "stream", "content": remaining}
                     _text_buf = ""
 
                     # 推送 executing 状态
@@ -162,19 +169,21 @@ class BrowserAgent:
                         "result_buf": "",
                         "step": _step_index,
                     }
-                    _step_index += 1
-                    yield {
-                        "type": "event",
-                        "event": {
-                            "type": "step",
-                            "data": {
-                                "action": evt.tool_call_name,
-                                "step": _tool_calls[tid]["step"],
-                                "status": "running",
+                    # done 是元工具(标记完成并转发汇报)，其 text 应进回复气泡，不显示工具步骤卡片
+                    if evt.tool_call_name != "done":
+                        _step_index += 1
+                        yield {
+                            "type": "event",
+                            "event": {
+                                "type": "step",
+                                "data": {
+                                    "action": evt.tool_call_name,
+                                    "step": _tool_calls[tid]["step"],
+                                    "status": "running",
+                                },
+                                "timestamp": 0,
                             },
-                            "timestamp": 0,
-                        },
-                    }
+                        }
 
                 elif evt.type == EventType.TOOL_CALL_DELTA:
                     tc = _tool_calls.get(evt.tool_call_id)
@@ -188,7 +197,16 @@ class BrowserAgent:
 
                 elif evt.type == EventType.TOOL_RESULT_END:
                     tc = _tool_calls.get(evt.tool_call_id)
-                    if tc:
+                    is_done = tc is not None and tc["name"] == "done"
+                    if is_done:
+                        # done 的 text 是给用户的最终汇报，推送到回复气泡，不进工具步骤卡片
+                        try:
+                            parsed_args = json.loads(tc["args_buf"]) if tc["args_buf"] else {}
+                        except (json.JSONDecodeError, TypeError):
+                            parsed_args = {}
+                        if isinstance(parsed_args, dict) and parsed_args.get("text"):
+                            yield {"type": "stream", "content": parsed_args["text"]}
+                    elif tc:
                         try:
                             parsed_args = json.loads(tc["args_buf"]) if tc["args_buf"] else {}
                         except (json.JSONDecodeError, TypeError):
@@ -208,20 +226,22 @@ class BrowserAgent:
                                 "timestamp": 0,
                             },
                         }
+                    # 非 done 工具结束后切回 thinking；done 标志任务结束
+                    if not is_done:
+                        yield {
+                            "type": "event",
+                            "event": {"type": "activity_status", "data": {"status": "thinking"}},
+                        }
 
-                    # 工具调用结束后推送 thinking 状态
-                    yield {
-                        "type": "event",
-                        "event": {"type": "activity_status", "data": {"status": "thinking"}},
-                    }
-
-            # 流式结束后推送最终 reflection
-            reflection = self._parse_reflection(_text_buf)
+            # 流式结束后分离剩余文本：reflection 进步骤卡片，回复文本进气泡
+            reflection, remaining = self._drain_reflection(_text_buf)
             if reflection:
                 yield {
                     "type": "event",
                     "event": {"type": "reflection", "data": reflection, "timestamp": 0},
                 }
+            if remaining:
+                yield {"type": "stream", "content": remaining}
 
             yield {"type": "stream", "content": "[DONE]"}
             yield {

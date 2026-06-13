@@ -124,6 +124,7 @@ async def main():
         lambda ws: handle_client(ws, config),
         host,
         port,
+        max_size=16 * 1024 * 1024,  # 16MB，支持高 DPI 全屏截图(base64)回传，默认 1MB 会被 websockets 关闭连接
     ):
         await asyncio.Future()  # 永久运行
 

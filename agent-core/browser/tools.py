@@ -107,14 +107,22 @@ def create_browser_tools(
                 DataBlock(source=Base64Source(
                     type="base64",
                     data=image_base64,
-                    media_type="image/png",
+                    media_type="image/jpeg",
                 )),
                 TextBlock(type="text", text="描述当前页面的状态、布局和所有可交互元素。包括按钮、输入框、链接等，标注它们的大致位置。"),
             ],
         )
-        response = await vlm_model(vlm_msg)
+        # 模型 __call__ 要求 messages 为 list[Msg]，传单个 Msg 会抛
+        # "Input must be a list of Msg objects."
+        # 且默认 stream=True，返回 async generator(流式 ChatResponse)，需迭代累积文本
+        response = await vlm_model([vlm_msg])
+        parts = []
+        async for chunk in response:
+            for block in chunk.content:
+                if isinstance(block, TextBlock):
+                    parts.append(block.text)
         log.info("VLM analysis complete")
-        return _CompatToolResponse(output=response.content)
+        return _CompatToolResponse(output="".join(parts))
 
     # --- CDP 降级工具 ---
 

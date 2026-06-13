@@ -8,11 +8,12 @@ from logger import get_logger
 log = get_logger("model")
 
 
-def create_model(config: dict):
+def create_model(config: dict, role: str | None = None):
     """根据配置字典创建模型实例。
 
     Args:
         config: 包含 provider、model、api_key 的字典。
+        role: 模型角色标识（如 LLM/VLM），仅用于日志。
 
     Returns:
         agentscope 模型实例。
@@ -20,15 +21,16 @@ def create_model(config: dict):
     provider = config["provider"]
     model_name = config["model"]
     api_key = config["api_key"]
+    role_tag = f"[{role}] " if role else ""
 
     if provider == "openai":
-        log.info("加载模型: %s", model_name)
+        log.info("%s加载模型: %s", role_tag, model_name)
         return OpenAIChatModel(
             credential=OpenAICredential(api_key=api_key),
             model=model_name,
         )
     elif provider == "dashscope":
-        log.info("加载模型: %s", model_name)
+        log.info("%s加载模型: %s", role_tag, model_name)
         return DashScopeChatModel(
             credential=DashScopeCredential(api_key=api_key),
             model=model_name,
