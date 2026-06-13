@@ -217,6 +217,15 @@ export default defineBackground(() => {
       }
       sendResponse({ stopped: true })
     }
+    if (message.type === 'new_session') {
+      // 转发新建会话指令给后端，并乐观关闭遮罩
+      wsClient.send({ type: 'new_session' })
+      if (isStreamingActive) {
+        isStreamingActive = false
+        sendToContentScript({ action: 'disable_overlay' })
+      }
+      sendResponse({ received: true })
+    }
     return false
   })
 
