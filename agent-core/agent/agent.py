@@ -6,6 +6,7 @@
 
 import json
 import re
+import uuid
 
 from agentscope.agent import Agent
 from agentscope.tool import Toolkit, FunctionTool
@@ -80,6 +81,22 @@ class BrowserAgent:
             system_prompt=SYSTEM_PROMPT,
         )
         log.info("BrowserAgent 初始化完成，挂载 %d 个工具", len(tool_functions))
+
+    def reset_context(self) -> None:
+        """清空对话历史，开启全新上下文。
+
+        保留 Agent 实例与已注册工具，仅重置会话状态。
+        permission_context 保留（用户级工具授权，跨会话有效）。
+        """
+        if self._agent is not None:
+            st = self._agent.state
+            st.context.clear()
+            st.summary = ""
+            st.session_id = uuid.uuid4().hex
+            st.cur_iter = 0
+            # ToolContext/TaskContext 是 pydantic BaseModel（非 list），用同类型默认实例替换
+            st.tool_context = type(st.tool_context)()
+            st.tasks_context = type(st.tasks_context)()
 
     def attach_ws(self, ws):
         """绑定 WebSocket 连接（支持重连）。"""

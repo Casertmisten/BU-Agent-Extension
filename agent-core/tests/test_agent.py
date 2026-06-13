@@ -188,3 +188,37 @@ async def test_parse_reflection():
 
     assert agent._parse_reflection("无 JSON 文本") is None
     assert agent._parse_reflection("") is None
+
+
+def test_reset_context_clears_state():
+    """新建会话：清历史、换 session_id、换新 tool/tasks context，保留 permission。"""
+    from types import SimpleNamespace
+    from agentscope.state import AgentState
+    from agentscope.message import UserMsg
+
+    agent = BrowserAgent(_make_config())
+    # 不调 init()，直接注入一个带真实 AgentState 的 _agent，聚焦 reset_context 本身
+    agent._agent = SimpleNamespace(state=AgentState())
+    st = agent._agent.state
+    st.context.append(UserMsg(name="user", content="旧消息"))
+    st.summary = "旧摘要"
+    st.cur_iter = 5
+    st.tool_context.activated_groups.append("group_a")
+    old_sid = st.session_id
+
+    agent.reset_context()
+
+    assert st.context == []
+    assert st.summary == ""
+    assert st.cur_iter == 0
+    assert st.session_id != old_sid
+    assert st.tool_context.activated_groups == []
+    # permission_context 保留（用户级授权跨会话有效）
+    assert st.permission_context is not None
+
+
+def test_reset_context_no_agent_is_noop():
+    """未 init 时 reset_context 安全无操作。"""
+    agent = BrowserAgent(_make_config())
+    agent.reset_context()  # self._agent is None，不应抛错
+    assert agent._agent is None
