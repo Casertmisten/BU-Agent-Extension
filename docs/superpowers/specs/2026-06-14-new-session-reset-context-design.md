@@ -39,13 +39,14 @@ def reset_context(self) -> None:
         st.summary = ""
         st.session_id = uuid.uuid4().hex
         st.cur_iter = 0
-        st.tool_context.clear()
-        st.tasks_context.clear()
+        # ToolContext/TaskContext 是 pydantic BaseModel（非 list），用同类型默认实例替换
+        st.tool_context = type(st.tool_context)()
+        st.tasks_context = type(st.tasks_context)()
 ```
 
 清理范围（用户已确认）：
 - `context`、`summary`、`cur_iter`：对话历史与压缩摘要、迭代计数 — **清**。
-- `tool_context`、`tasks_context`：上一轮工具/任务状态 — **清**（用户确认一并清空）。
+- `tool_context`、`tasks_context`：上一轮工具/任务状态（pydantic `BaseModel`，非 `list`）— **换新空实例**（用户确认一并清空）。
 - `session_id`：**换新**。
 - `permission_context`：**保留**（用户级 `PermissionMode.BYPASS` 等授权跨会话有效）。
 
