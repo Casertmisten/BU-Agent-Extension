@@ -1,4 +1,5 @@
 # tests/test_agent.py
+import os
 import pytest
 from unittest.mock import AsyncMock
 from agent.agent import BrowserAgent
@@ -17,10 +18,17 @@ class AsyncIteratorMock:
 
 
 
+# agent-core 目录的绝对路径（__file__ 为 tests/test_agent.py），
+# 使技能目录解析不依赖 pytest 的 CWD。生产环境 server.py 在 agent-core/ 下启动，
+# config.yaml 里的 "./skills" 相对 agent-core/，与此处一致。
+_AGENT_CORE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def _make_config():
     return {
         "llm": {"provider": "dashscope", "model": "qwen-plus", "api_key": "test-key"},
         "vlm": {"provider": "dashscope", "model": "qwen-plus", "api_key": "test-key"},
+        "skills": {"dirs": [os.path.join(_AGENT_CORE_DIR, "skills")]},
     }
 
 
@@ -242,3 +250,27 @@ def test_reset_context_isolates_orphan_tool_writes():
 
     # 新会话的 state 不受 orphan 写入影响
     assert new.state.context == []
+
+
+@pytest.mark.asyncio
+async def test_list_skills_returns_example():
+    """init 后 list_skills 应返回 [{name, description}]，含 example。"""
+    agent = BrowserAgent(_make_config())
+    agent.init()
+    skills = await agent.list_skills()
+    names = [s["name"] for s in skills]
+    assert "example" in names
+    example = next(s for s in skills if s["name"] == "example")
+    assert "description" in example
+    assert isinstance(example["description"], str)
+
+
+@pytest.mark.asyncio
+async def test_list_skills_empty_when_no_dirs():
+    """skills.dirs 为空时 list_skills 返回空列表，不报错。"""
+    config = _make_config()
+    config["skills"] = {"dirs": []}
+    agent = BrowserAgent(config)
+    agent.init()
+    skills = await agent.list_skills()
+    assert skills == []
