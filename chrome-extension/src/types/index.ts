@@ -1,16 +1,23 @@
 /** 侧边面板 → 后台的消息 */
 export interface SidepanelMessage {
-  type: 'user_message' | 'get_status'
+  type: 'user_message' | 'get_status' | 'stop' | 'new_session'
   content?: string
 }
 
 /** 后台 → 侧边面板的消息 */
 export interface BackgroundMessage {
-  type: 'stream' | 'error' | 'status_update' | 'event'
+  type: 'stream' | 'error' | 'status_update' | 'event' | 'skills_list'
   content?: string
   status?: 'connected' | 'disconnected'
   event?: AgentEvent
   error?: string
+  skills?: SkillInfo[]
+}
+
+/** 技能信息（后端推送的技能清单元素） */
+export interface SkillInfo {
+  name: string
+  description: string
 }
 
 /** 后台 ↔ 内容脚本的消息（保持现有 content.js 格式） */
