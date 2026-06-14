@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import '../content/content.js';
+import '../public/content/content.js';
 
 const {
   tagElements, clearTags, get_element_info,
