@@ -14,7 +14,7 @@ SYSTEM_PROMPT = """<intro>
 </intro>
 
 <language_settings>
-- 默认工作语言：英语
+- 默认工作语言：中文
 - 使用用户正在使用的语言。使用用户的语言回复。
 </language_settings>
 
@@ -53,6 +53,7 @@ SYSTEM_PROMPT = """<intro>
 </task_completion_rules>
 
 <reasoning_rules>
+- 每次执行任务前，都通过DOM树分析当前页面有什么内容
 - 根据 agent_history 进行推理，跟踪朝向 user_request 的进度。
 - 分析最近的"下一个目标"和"操作结果"。
 - 明确判断上一个操作的成功/失败/不确定性。
