@@ -19,3 +19,6 @@ server:
 skills:
   dirs:
     - "./skills"
+
+browser:
+  dom_strategy: ${DOM_STRATEGY:-ax}   # "ax"=新版 AX 树解析, "flat"=旧版扁平列表
