@@ -84,14 +84,20 @@ skills:
 ```python
 from agentscope.skill import LocalSkillLoader
 
+# scan_subdir=True：每个技能放在 <dir>/<skill-name>/SKILL.md，需递归扫描子目录
 skill_dirs = self._config.get("skills", {}).get("dirs", ["./skills"])
-skills_or_loaders = [LocalSkillLoader(directory=d) for d in skill_dirs if os.path.isdir(d)]
+skills_or_loaders = [
+    LocalSkillLoader(directory=d, scan_subdir=True)
+    for d in skill_dirs if os.path.isdir(d)
+]
 
 toolkit = Toolkit(
     tools=tool_objects,
     skills_or_loaders=skills_or_loaders,
 )
 ```
+
+> **关键**：`LocalSkillLoader(directory=..., scan_subdir=False)`（默认）只扫描目录自身的 `SKILL.md`，不进子目录。示例技能放在 `skills/example/SKILL.md`，因此**必须传 `scan_subdir=True`** 才能被发现。
 
 用显式 `LocalSkillLoader`（而非直接传 str）便于跳过不存在的目录并记录警告。`reset_context()` 复用旧 `toolkit`，无需改。
 
@@ -175,7 +181,13 @@ return { ..., skills }
 
 ### background 转发（`src/entrypoints/background.ts`）
 
-通用转发 `wsClient.onMessage → chrome.runtime.sendMessage` 通常已能透传 `skills_list`；review 时确认。
+`background.ts` 的 WS 转发是**显式 if-else 链**（`action`/`stream`/`event`/`error`），**不是通用透传**，因此**必须新增 `skills_list` 转发分支**：
+
+```typescript
+} else if (type === 'skills_list') {
+  chrome.runtime.sendMessage(msg).catch(() => {})
+}
+```
 
 ### 技能按钮 + Popover（`src/components/ChatView.tsx`）
 
