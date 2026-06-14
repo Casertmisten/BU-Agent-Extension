@@ -1,6 +1,6 @@
 /** 侧边面板 → 后台的消息 */
 export interface SidepanelMessage {
-  type: 'user_message' | 'get_status' | 'stop' | 'new_session'
+  type: 'user_message' | 'get_status' | 'get_skills' | 'stop' | 'new_session'
   content?: string
 }
 

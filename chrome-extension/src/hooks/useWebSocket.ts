@@ -43,6 +43,16 @@ export function useWebSocket(): UseWebSocketReturn {
     return () => clearInterval(timer)
   }, [])
 
+  // 挂载时拉取一次技能清单：skills_list 仅在后端连接时推送，sidepanel 可能晚开，
+  // 需向 background 取缓存的副本（技能是静态的，无需轮询）。
+  useEffect(() => {
+    chrome.runtime.sendMessage({ type: 'get_skills' }, (res) => {
+      if (!chrome.runtime.lastError && res) {
+        setSkills((res.skills as SkillInfo[]) ?? [])
+      }
+    })
+  }, [])
+
   // 监听 background 推送的消息
   useEffect(() => {
     const listener = (message: BackgroundMessage) => {

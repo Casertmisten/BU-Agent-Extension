@@ -22,6 +22,9 @@ export default defineBackground(() => {
 
   // WS 消息路由
   let isStreamingActive = false
+  // 缓存后端推送的技能清单：skills_list 仅在连接时推送一次，sidepanel 可能晚于
+  // 推送打开，需缓存以便 sidepanel 挂载时通过 get_skills 拉取（仿 get_status 模式）。
+  let cachedSkills: unknown[] = []
 
   wsClient.onMessage((msg) => {
     const type = msg.type as string
@@ -53,7 +56,8 @@ export default defineBackground(() => {
       }
       chrome.runtime.sendMessage(msg).catch(() => {})
     } else if (type === 'skills_list') {
-      // 转发后端推送的技能清单到 sidepanel
+      // 缓存并转发后端推送的技能清单到 sidepanel
+      cachedSkills = (msg as any).skills ?? []
       chrome.runtime.sendMessage(msg).catch(() => {})
     }
   })
@@ -210,6 +214,10 @@ export default defineBackground(() => {
     }
     if (message.type === 'get_status') {
       sendResponse({ connected: wsClient.isConnected() })
+    }
+    if (message.type === 'get_skills') {
+      // sidepanel 挂载时拉取缓存的技能清单（见 cachedSkills 注释）
+      sendResponse({ skills: cachedSkills })
     }
     if (message.type === 'stop') {
       // 转发停止指令给后端 agent
