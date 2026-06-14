@@ -9,6 +9,7 @@ const {
   clickElement, inputText, scrollPage,
   enableOverlay, disableOverlay,
 } = window.__BU_AGENT__;
+const { parsePage } = window.__BU_AGENT__;
 
 describe('tagElements', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
@@ -227,5 +228,70 @@ describe('AX inference', () => {
       expect(isInteractive('heading')).toBe(false);
       expect(isInteractive('main')).toBe(false);
     });
+  });
+});
+
+describe('parsePage', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('输出嵌套 AX 树，顶层为 WebArea', () => {
+    document.title = '测试页';
+    document.body.innerHTML = '<button>登录</button>';
+    const tree = parsePage();
+    expect(tree.role).toBe('WebArea');
+    expect(tree.name).toBe('测试页');
+    expect(tree.children[0].role).toBe('button');
+  });
+
+  it('给可交互节点赋 agent-xx 并写入 DOM', () => {
+    document.body.innerHTML = '<button>登录</button><h1>标题</h1>';
+    const tree = parsePage();
+    const btnNode = tree.children.find((c) => c.role === 'button');
+    expect(btnNode.id).toMatch(/^agent-\d{2}$/);
+    expect(document.querySelector('[backend-id="' + btnNode.id + '"]')).not.toBeNull();
+  });
+
+  it('纯文本/标题节点不赋 agent-xx', () => {
+    document.body.innerHTML = '<h1>标题</h1><p>段落</p>';
+    const tree = parsePage();
+    const heading = tree.children.find((c) => c.role === 'heading');
+    expect(heading.id).toBeUndefined();
+    expect(document.querySelectorAll('[backend-id]').length).toBe(0);
+  });
+
+  it('隐藏节点被剪枝', () => {
+    document.body.innerHTML = '<button>可见</button><div style="display:none"><button>隐藏</button></div>';
+    const tree = parsePage();
+    const labels = JSON.stringify(tree);
+    expect(labels).toContain('可见');
+    expect(labels).not.toContain('隐藏');
+  });
+
+  it('容器被剪但子节点上浮', () => {
+    document.body.innerHTML = '<div><button>登录</button></div>';
+    const tree = parsePage();
+    expect(tree.children[0].role).toBe('button');
+    expect(tree.children[0].name).toBe('登录');
+  });
+
+  it('accessible name 优先级：aria-label 胜过 textContent', () => {
+    document.body.innerHTML = '<button aria-label="提交">Submit</button>';
+    const tree = parsePage();
+    expect(tree.children[0].name).toBe('提交');
+  });
+
+  it('重新调用先清理旧标记', () => {
+    document.body.innerHTML = '<button>A</button>';
+    parsePage();
+    document.body.innerHTML = '<button>B</button><button>C</button>';
+    parsePage();
+    expect(document.querySelectorAll('[backend-id]').length).toBe(2);
+  });
+
+  it('body 为空返回空 children', () => {
+    document.body.innerHTML = '';
+    const tree = parsePage();
+    expect(tree.role).toBe('WebArea');
+    expect(tree.children).toEqual([]);
   });
 });
