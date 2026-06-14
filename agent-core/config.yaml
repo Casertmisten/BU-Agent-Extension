@@ -15,3 +15,7 @@ server:
   host: ${SERVER_HOST:-localhost}
   port: ${SERVER_PORT:-8765}
   heartbeat_interval: ${HEARTBEAT_INTERVAL:-30}
+
+skills:
+  dirs:
+    - "./skills"

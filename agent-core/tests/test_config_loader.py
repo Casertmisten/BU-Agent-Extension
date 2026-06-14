@@ -38,3 +38,10 @@ llm:
     config = load_config(str(config_file))
     assert config["llm"]["api_key"] == "env-key-123"
     del os.environ["TEST_BU_KEY"]
+
+
+def test_skills_config_has_default_dir():
+    """config.yaml 应包含 skills.dirs，默认含 ./skills。"""
+    config = load_config("config.yaml")
+    assert "skills" in config
+    assert "./skills" in config["skills"]["dirs"]
