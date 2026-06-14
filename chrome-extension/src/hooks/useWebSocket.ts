@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AgentEvent, ActivityStatus, BackgroundMessage, Message } from '@/types'
+import type { AgentEvent, ActivityStatus, BackgroundMessage, Message, SkillInfo } from '@/types'
 
 export interface UseWebSocketReturn {
   status: 'connected' | 'disconnected'
@@ -10,6 +10,7 @@ export interface UseWebSocketReturn {
   error: string | null
   clearMessages: () => void
   activityStatus: ActivityStatus
+  skills: SkillInfo[]
 }
 
 function uid(): string {
@@ -22,6 +23,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [isStreaming, setIsStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activityStatus, setActivityStatus] = useState<ActivityStatus>('idle')
+  const [skills, setSkills] = useState<SkillInfo[]>([])
 
   const streamingRef = useRef<Message | null>(null)
 
@@ -108,6 +110,10 @@ export function useWebSocket(): UseWebSocketReturn {
         setStatus(message.status ?? 'disconnected')
       }
 
+      if (message.type === 'skills_list') {
+        setSkills(message.skills ?? [])
+      }
+
       if (message.type === 'event') {
         const evt = message.event
         if (!evt) return
@@ -184,5 +190,5 @@ const clearMessages = useCallback(() => {
     setActivityStatus('idle')
   }, [])
 
-  return { status, sendTask, messages, isStreaming, stopStream, error, clearMessages, activityStatus }
+  return { status, sendTask, messages, isStreaming, stopStream, error, clearMessages, activityStatus, skills }
 }
