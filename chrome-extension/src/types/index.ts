@@ -43,7 +43,7 @@ export interface Message {
 
 /** Agent 事件（事件卡片用） */
 export interface AgentEvent {
-  type: 'step' | 'observation' | 'error' | 'result' | 'retry' | 'activity' | 'reflection' | 'activity_status'
+  type: 'step' | 'observation' | 'error' | 'result' | 'retry' | 'activity' | 'reflection' | 'activity_status' | 'token_usage'
   data: Record<string, unknown>
   timestamp: number
 }
