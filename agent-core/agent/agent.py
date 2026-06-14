@@ -5,21 +5,18 @@
 """
 
 import json
-import os
 import re
 
 from agentscope.agent import Agent
-from agentscope.tool import Toolkit, FunctionTool
-from agentscope.skill import LocalSkillLoader
 from agentscope.message import UserMsg
 from agentscope.event import EventType
 from agentscope.state import AgentState
 from agentscope.permission import PermissionContext, PermissionMode
 
 from browser.connection import BrowserConnection
-from browser.tools import create_browser_tools
 from agent.model import create_model
 from agent.prompts import SYSTEM_PROMPT
+from agent.tools import create_toolkit
 from logger import get_logger
 
 log = get_logger("agent")
@@ -63,27 +60,9 @@ class BrowserAgent:
         llm_model = create_model(self._config["llm"], role="LLM")
         vlm_model = create_model(self._config["vlm"], role="VLM")
 
-        # 创建并注册浏览器工具
-        tool_functions = create_browser_tools(
-            self._conn, vlm_model, self._viewport_info,
-        )
-        tool_objects = [FunctionTool(fn) for fn in tool_functions.values()]
-
-        # 注册技能：从配置的多目录扫描 SKILL.md（递归子目录）。
-        # scan_subdir=True：每个技能位于 <dir>/<skill-name>/SKILL.md。
-        skill_dirs = self._config.get("skills", {}).get("dirs", [])
-        skills_or_loaders = []
-        for d in skill_dirs:
-            if os.path.isdir(d):
-                skills_or_loaders.append(
-                    LocalSkillLoader(directory=d, scan_subdir=True)
-                )
-            else:
-                log.warning("技能目录不存在，已跳过: %s", d)
-
-        toolkit = Toolkit(
-            tools=tool_objects,
-            skills_or_loaders=skills_or_loaders,
+        # 构建工具集（浏览器工具 + 技能），细节收敛在 agent.tools
+        toolkit = create_toolkit(
+            self._config, self._conn, vlm_model, self._viewport_info,
         )
 
         state = AgentState(
@@ -97,7 +76,7 @@ class BrowserAgent:
             state=state,
             system_prompt=SYSTEM_PROMPT,
         )
-        log.info("BrowserAgent 初始化完成，挂载 %d 个工具", len(tool_functions))
+        log.info("BrowserAgent 初始化完成")
 
     async def list_skills(self) -> list[dict]:
         """返回当前注册的技能清单 [{name, description}]，供前端展示。
