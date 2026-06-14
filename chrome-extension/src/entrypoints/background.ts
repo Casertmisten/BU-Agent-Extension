@@ -75,7 +75,7 @@ export default defineBackground(() => {
     try {
       let result
       switch (action) {
-        case 'parse_dom': case 'get_element_info': case 'click': case 'input_text': case 'scroll': case 'scroll_element': case 'extract_content':
+        case 'parse_page': case 'parse_dom': case 'get_element_info': case 'click': case 'input_text': case 'scroll': case 'scroll_element': case 'extract_content':
           result = await executeInContentScript(msg); break
         case 'screenshot': result = await handleScreenshot(); break
         case 'navigate': result = await handleNavigate(msg.url as string); break

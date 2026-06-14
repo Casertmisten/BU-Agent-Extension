@@ -22,7 +22,7 @@ export interface SkillInfo {
 
 /** 后台 ↔ 内容脚本的消息（保持现有 content.js 格式） */
 export interface ContentMessage {
-  action: 'parse_dom' | 'get_element_info' | 'click' | 'input_text' | 'scroll' | 'enable_overlay' | 'disable_overlay'
+  action: 'parse_page' | 'parse_dom' | 'get_element_info' | 'click' | 'input_text' | 'scroll' | 'enable_overlay' | 'disable_overlay'
   task_id?: string
   url?: string
   seconds?: number
