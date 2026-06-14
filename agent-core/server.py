@@ -59,6 +59,15 @@ async def handle_client(websocket, config: dict):
     agent = _get_or_create_agent(config)
     agent.attach_ws(websocket)
 
+    # 握手后推送一次技能清单（技能是全局静态能力，与会话无关）。
+    # 失败不阻断连接——前端 skills 保持空，按钮仍可点（显示空列表）。
+    try:
+        skills = await agent.list_skills()
+        await websocket.send(json.dumps({"type": "skills_list", "skills": skills}))
+        log.info("已推送技能清单，共 %d 个技能", len(skills))
+    except Exception as e:
+        log.warning("推送技能列表失败: %s", e)
+
     # 重连时通知前端之前的状态已丢失
     if agent._busy:
         log.warning("重连时 Agent 仍在执行，前端可能需要刷新状态")
