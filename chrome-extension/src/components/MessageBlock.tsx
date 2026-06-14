@@ -34,7 +34,10 @@ export function MessageBlock({ message, activityStatus }: { message: Message; ac
     .replace(/^\n+/, '')
     .trimEnd()
 
-  const visibleEvents = message.events?.filter(e => e.type !== 'activity_status') || []
+  const tokenUsage = message.events?.find(e => e.type === 'token_usage')?.data
+  const visibleEvents = message.events?.filter(
+    e => e.type !== 'activity_status' && e.type !== 'token_usage'
+  ) || []
   const hasVisibleEvents = visibleEvents.length > 0
   // 历史会话永远视为已完成，不进入流式分支
   const isStreamingMsg = activityStatus != null && message.status === 'streaming'
@@ -55,6 +58,15 @@ export function MessageBlock({ message, activityStatus }: { message: Message; ac
           <div className="max-w-[85%] rounded-xl rounded-bl-sm border bg-card px-3 py-2 text-xs prose prose-xs prose-sm:max-w-none prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-pre:my-1 prose-headings:my-1 shadow-sm">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
           </div>
+        </div>
+      )}
+      {/* Token 消耗胶囊：一轮对话总 token，弱化元信息 */}
+      {tokenUsage && typeof tokenUsage.input === 'number'
+        && typeof tokenUsage.output === 'number' && (
+        <div className="flex justify-start shrink-0">
+          <span className="text-[10px] text-muted-foreground px-3 py-1">
+            Token: 入 {tokenUsage.input.toLocaleString()} / 出 {tokenUsage.output.toLocaleString()}
+          </span>
         </div>
       )}
     </Fragment>
