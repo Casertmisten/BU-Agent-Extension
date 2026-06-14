@@ -52,6 +52,9 @@ export default defineBackground(() => {
         sendToContentScript({ action: 'disable_overlay' })
       }
       chrome.runtime.sendMessage(msg).catch(() => {})
+    } else if (type === 'skills_list') {
+      // 转发后端推送的技能清单到 sidepanel
+      chrome.runtime.sendMessage(msg).catch(() => {})
     }
   })
 
