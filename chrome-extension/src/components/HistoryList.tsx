@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle, History, RotateCcw, Trash2, XCircle } from 'lucide-react'
+import { ArrowLeft, CheckCircle, History, Trash2, XCircle } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { deleteSession, listSessions, clearSessions } from '@/lib/idb'
@@ -18,11 +18,9 @@ function timeAgo(ts: number): string {
 export function HistoryList({
   onSelect,
   onBack,
-  onRerun,
 }: {
   onSelect: (id: string) => void
   onBack: () => void
-  onRerun: (task: string) => void
 }) {
   const [sessions, setSessions] = useState<Session[]>([])
   const [loading, setLoading] = useState(true)
@@ -104,14 +102,6 @@ export function HistoryList({
                   {timeAgo(session.createdAt)} · {session.messages.length} 条消息
                 </p>
                 <div className="flex items-center gap-0.5 ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); onRerun(session.task) }}
-                    className="p-0.5 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                    title="重新运行"
-                  >
-                    <RotateCcw className="size-3" />
-                  </button>
                   <button
                     type="button"
                     onClick={(e) => handleDelete(e, session.id)}

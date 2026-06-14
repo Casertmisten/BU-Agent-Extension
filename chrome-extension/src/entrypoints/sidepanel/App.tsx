@@ -31,11 +31,6 @@ export default function App() {
     }
   }, [isStreaming, messages])
 
-  const handleRerun = useCallback((task: string) => {
-    setView({ name: 'chat' })
-    sendTask(task)
-  }, [sendTask])
-
   const handleSaveConfig = useCallback((newConfig: AppConfig) => {
     saveConfig(newConfig)
     setView({ name: 'chat' })
@@ -56,7 +51,6 @@ export default function App() {
         <HistoryList
           onSelect={(id) => setView({ name: 'history-detail', sessionId: id })}
           onBack={() => setView({ name: 'chat' })}
-          onRerun={handleRerun}
         />
       </div>
     )
@@ -68,7 +62,6 @@ export default function App() {
         <HistoryDetail
           sessionId={view.sessionId}
           onBack={() => setView({ name: 'history' })}
-          onRerun={handleRerun}
         />
       </div>
     )

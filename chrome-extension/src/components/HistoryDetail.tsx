@@ -1,18 +1,16 @@
-import { ArrowLeft, RotateCcw, Trash2 } from 'lucide-react'
+import { ArrowLeft, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { EventCard } from '@/components/EventCards'
+import { MessageBlock } from '@/components/MessageBlock'
 import { deleteSession, getSession } from '@/lib/idb'
 import type { Session } from '@/types'
 
 export function HistoryDetail({
   sessionId,
   onBack,
-  onRerun,
 }: {
   sessionId: string
   onBack: () => void
-  onRerun: (task: string) => void
 }) {
   const [session, setSession] = useState<Session | null>(null)
 
@@ -43,13 +41,6 @@ export function HistoryDetail({
         <div className="mt-2 flex items-center gap-2">
           <button
             type="button"
-            onClick={() => onRerun(session.task)}
-            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-          >
-            <RotateCcw className="size-3" />重新运行
-          </button>
-          <button
-            type="button"
             onClick={async () => { await deleteSession(sessionId); onBack() }}
             className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
           >
@@ -58,15 +49,10 @@ export function HistoryDetail({
         </div>
       </div>
 
+      {/* 消息列表：与正式会话样式一致 —— 用户气泡 / 工具步骤 / Agent 气泡 */}
       <div className="flex-1 overflow-y-auto p-3 space-y-2">
         {session.messages.map((msg) => (
-          <div key={msg.id} className="text-xs">
-            <span className="text-muted-foreground">{msg.role === 'user' ? '用户' : msg.role === 'agent' ? 'Agent' : '系统'}:</span>
-            <span className="ml-1">{msg.content}</span>
-          </div>
-        ))}
-        {session.events.map((ev, i) => (
-          <EventCard key={i} event={ev} />
+          <MessageBlock key={msg.id} message={msg} />
         ))}
       </div>
     </div>
