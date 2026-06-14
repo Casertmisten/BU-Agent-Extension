@@ -163,6 +163,8 @@ class BrowserAgent:
         _tool_calls: dict[str, dict] = {}
         _step_index = 0
         _text_buf = ""
+        _total_input_tokens = 0
+        _total_output_tokens = 0
 
         try:
             # 推送初始 thinking 状态
@@ -174,7 +176,15 @@ class BrowserAgent:
             async for evt in self._agent.reply_stream(
                 [UserMsg(name="user", content=text)]
             ):
-                if evt.type == EventType.TEXT_BLOCK_DELTA:
+                if evt.type == EventType.MODEL_CALL_END:
+                    # 累加本轮对话的 token 消耗，结束时一次性发送
+                    it = getattr(evt, "input_tokens", None)
+                    ot = getattr(evt, "output_tokens", None)
+                    if isinstance(it, int):
+                        _total_input_tokens += it
+                    if isinstance(ot, int):
+                        _total_output_tokens += ot
+                elif evt.type == EventType.TEXT_BLOCK_DELTA:
                     # 缓冲文本，不立即推送：需在工具调用/流结束时区分 reflection（进步骤卡片）
                     # 与回复文本（进气泡），避免 reflection JSON 显示在回复气泡
                     _text_buf += evt.delta
@@ -278,6 +288,18 @@ class BrowserAgent:
             if remaining:
                 yield {"type": "stream", "content": remaining}
 
+            # 发送本轮对话的 token 消耗汇总（在 [DONE] 之前，前端定稿前收到）
+            yield {
+                "type": "event",
+                "event": {
+                    "type": "token_usage",
+                    "data": {
+                        "input": _total_input_tokens,
+                        "output": _total_output_tokens,
+                    },
+                    "timestamp": 0,
+                },
+            }
             yield {"type": "stream", "content": "[DONE]"}
             yield {
                 "type": "event",

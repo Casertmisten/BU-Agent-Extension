@@ -274,3 +274,47 @@ async def test_list_skills_empty_when_no_dirs():
     agent.init()
     skills = await agent.list_skills()
     assert skills == []
+
+
+def test_run_yields_token_usage():
+    """run() 应累加 MODEL_CALL_END 的 token，并在 [DONE] 前 yield token_usage 事件。"""
+    import asyncio
+    from unittest.mock import MagicMock, patch
+    from agentscope.event import EventType
+
+    agent = BrowserAgent(_make_config())
+    agent.init()
+
+    # 构造假事件流：2 次 MODEL_CALL_END + 1 段文本 + done 工具
+    fake_events = [
+        MagicMock(type=EventType.MODEL_CALL_END, input_tokens=5000, output_tokens=200),
+        MagicMock(type=EventType.TEXT_BLOCK_DELTA, delta="分析中"),
+        MagicMock(type=EventType.MODEL_CALL_END, input_tokens=5200, output_tokens=150),
+        MagicMock(type=EventType.TOOL_CALL_START, tool_call_id="t1", tool_call_name="done"),
+        MagicMock(type=EventType.TOOL_RESULT_END, tool_call_id="t1", state="success"),
+    ]
+
+    async def collect():
+        results = []
+        with patch.object(agent._agent, "reply_stream",
+                          return_value=AsyncIteratorMock(fake_events)):
+            async for item in agent.run("测试指令"):
+                results.append(item)
+        return results
+
+    results = asyncio.run(collect())
+
+    # 找到 token_usage 事件
+    token_events = [r for r in results
+                    if r.get("type") == "event"
+                    and r.get("event", {}).get("type") == "token_usage"]
+    assert len(token_events) == 1
+    assert token_events[0]["event"]["data"]["input"] == 10200
+    assert token_events[0]["event"]["data"]["output"] == 350
+
+    # token_usage 应在 [DONE] 之前
+    tu_idx = next(i for i, r in enumerate(results)
+                  if r.get("event", {}).get("type") == "token_usage")
+    done_idx = next(i for i, r in enumerate(results)
+                    if r.get("type") == "stream" and r.get("content") == "[DONE]")
+    assert tu_idx < done_idx
