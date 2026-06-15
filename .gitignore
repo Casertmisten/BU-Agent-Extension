@@ -28,9 +28,6 @@ Thumbs.db
 # Agent core
 agent-core/uv.lock
 
-# Docs (generated)
-docs/superpowers/plans/
-
 # WXT build output
 chrome-extension/.output/
 chrome-extension/.wxt/

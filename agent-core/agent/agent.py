@@ -67,7 +67,8 @@ class BrowserAgent:
         )
         tool_objects = [FunctionTool(fn) for fn in tool_functions.values()]
         toolkit = Toolkit(tools=tool_objects)
-
+        
+        # 初始化状态，允许工具调用（绕过权限检查）
         state = AgentState(
             permission_context=PermissionContext(mode=PermissionMode.BYPASS),
         )
@@ -133,7 +134,6 @@ class BrowserAgent:
             async for evt in self._agent.reply_stream(
                 [UserMsg(name="user", content=text)]
             ):
-                log.debug("流式事件: type=%s", evt.type)
 
                 if evt.type == EventType.TEXT_BLOCK_DELTA:
                     _text_buf += evt.delta

@@ -5,11 +5,13 @@ llm:
   provider: ${LLM_PROVIDER:-dashscope}
   model: ${LLM_MODEL:-glm-5.1}
   api_key: ${LLM_API_KEY}
+  base_url: ${LLM_BASE_URL:-}
 
 vlm:
   provider: ${VLM_PROVIDER:-dashscope}
   model: ${VLM_MODEL:-qwen3.6-35b-a3b}
   api_key: ${VLM_API_KEY}
+  base_url: ${VLM_BASE_URL:-}
 
 server:
   host: ${SERVER_HOST:-localhost}
