@@ -8,16 +8,15 @@ import json
 import re
 
 from agentscope.agent import Agent
-from agentscope.tool import Toolkit, FunctionTool
 from agentscope.message import UserMsg
 from agentscope.event import EventType
 from agentscope.state import AgentState
 from agentscope.permission import PermissionContext, PermissionMode
 
 from browser.connection import BrowserConnection
-from browser.tools import create_browser_tools
 from agent.model import create_model
 from agent.prompts import SYSTEM_PROMPT
+from agent.tools import create_toolkit
 from logger import get_logger
 
 log = get_logger("agent")
@@ -61,14 +60,18 @@ class BrowserAgent:
         llm_model = create_model(self._config["llm"], role="LLM")
         vlm_model = create_model(self._config["vlm"], role="VLM")
 
-        # 创建并注册浏览器工具
-        tool_functions = create_browser_tools(
-            self._conn, vlm_model, self._viewport_info,
+        # 构建工具集（浏览器工具 + 技能），细节收敛在 agent.tools
+        toolkit = create_toolkit(
+            self._config, self._conn, vlm_model, self._viewport_info,
         )
+<<<<<<< HEAD
         tool_objects = [FunctionTool(fn) for fn in tool_functions.values()]
         toolkit = Toolkit(tools=tool_objects)
         
         # 初始化状态，允许工具调用（绕过权限检查）
+=======
+
+>>>>>>> origin/mac-master
         state = AgentState(
             permission_context=PermissionContext(mode=PermissionMode.BYPASS),
         )
@@ -80,7 +83,45 @@ class BrowserAgent:
             state=state,
             system_prompt=SYSTEM_PROMPT,
         )
-        log.info("BrowserAgent 初始化完成，挂载 %d 个工具", len(tool_functions))
+        log.info("BrowserAgent 初始化完成")
+
+    async def list_skills(self) -> list[dict]:
+        """返回当前注册的技能清单 [{name, description}]，供前端展示。
+
+        直接委托给 toolkit，技能集是全局静态的，与会话无关。
+        """
+        if self._agent is None:
+            return []
+        skills = await self._agent.toolkit._get_available_skills()
+        return [
+            {"name": s.name, "description": s.description}
+            for s in skills.values()
+        ]
+
+    def reset_context(self) -> None:
+        """新建会话：重建 Agent 实例以彻底隔离上下文。
+
+        agentscope 的工具调用在独立的 gather_task（asyncio.create_task）中执行，
+        _current_task.cancel() 不会级联到它。若仅清空 state.context，正在运行的
+        orphan 工具（如 VLM 分析）完成后会通过 _save_to_context 把旧工具结果写回
+        已被清空的 context，污染新会话。重建 Agent 实例后，orphan 仍持有旧 Agent
+        引用（self 绑定），写入旧 state（随旧实例被丢弃），新 Agent 的 state 全新
+        且干净。
+
+        model/toolkit 为重资产，复用旧实例（不重新加载/不重新注册）；
+        permission_context 保留（用户级工具授权跨会话有效）。
+        """
+        if self._agent is not None:
+            old = self._agent
+            self._agent = Agent(
+                name="browser_agent",
+                system_prompt=SYSTEM_PROMPT,
+                model=old.model,
+                toolkit=old.toolkit,
+                state=AgentState(
+                    permission_context=old.state.permission_context,
+                ),
+            )
 
     def attach_ws(self, ws):
         """绑定 WebSocket 连接（支持重连）。"""
@@ -93,20 +134,26 @@ class BrowserAgent:
             log.info("WebSocket 已绑定")
 
     @staticmethod
-    def _parse_reflection(text: str) -> dict | None:
-        """从 LLM 文本输出中提取 reflection JSON。"""
+    def _drain_reflection(text: str) -> tuple[dict | None, str]:
+        """从文本中分离 reflection JSON 与剩余回复文本。
+
+        reflection 只显示在工具步骤卡片，不应进入回复气泡；剩余文本作为给用户的回复。
+        返回 (reflection_dict 或 None, remaining_text)。
+        """
         match = re.search(r'\{[^{}]*"evaluation_previous_goal"[^{}]*\}', text, re.DOTALL)
         if not match:
-            return None
+            return None, text
         try:
             data = json.loads(match.group())
-            return {
-                "evaluation_previous_goal": data.get("evaluation_previous_goal", ""),
-                "memory": data.get("memory", ""),
-                "next_goal": data.get("next_goal", ""),
-            }
         except json.JSONDecodeError:
-            return None
+            return None, text
+        reflection = {
+            "evaluation_previous_goal": data.get("evaluation_previous_goal", ""),
+            "memory": data.get("memory", ""),
+            "next_goal": data.get("next_goal", ""),
+        }
+        remaining = (text[:match.start()] + text[match.end():]).strip()
+        return reflection, remaining
 
     async def run(self, text: str):
         """执行用户指令，流式返回事件字典。
@@ -123,6 +170,8 @@ class BrowserAgent:
         _tool_calls: dict[str, dict] = {}
         _step_index = 0
         _text_buf = ""
+        _total_input_tokens = 0
+        _total_output_tokens = 0
 
         try:
             # 推送初始 thinking 状态
@@ -134,19 +183,34 @@ class BrowserAgent:
             async for evt in self._agent.reply_stream(
                 [UserMsg(name="user", content=text)]
             ):
+<<<<<<< HEAD
 
                 if evt.type == EventType.TEXT_BLOCK_DELTA:
+=======
+                if evt.type == EventType.MODEL_CALL_END:
+                    # 累加本轮对话的 token 消耗，结束时一次性发送
+                    it = getattr(evt, "input_tokens", None)
+                    ot = getattr(evt, "output_tokens", None)
+                    if isinstance(it, int):
+                        _total_input_tokens += it
+                    if isinstance(ot, int):
+                        _total_output_tokens += ot
+                elif evt.type == EventType.TEXT_BLOCK_DELTA:
+                    # 缓冲文本，不立即推送：需在工具调用/流结束时区分 reflection（进步骤卡片）
+                    # 与回复文本（进气泡），避免 reflection JSON 显示在回复气泡
+>>>>>>> origin/mac-master
                     _text_buf += evt.delta
-                    yield {"type": "stream", "content": evt.delta}
 
                 elif evt.type == EventType.TOOL_CALL_START:
-                    # 在工具调用前推送 reflection
-                    reflection = self._parse_reflection(_text_buf)
+                    # 在工具调用前分离 reflection 与回复文本
+                    reflection, remaining = self._drain_reflection(_text_buf)
                     if reflection:
                         yield {
                             "type": "event",
                             "event": {"type": "reflection", "data": reflection, "timestamp": 0},
                         }
+                    if remaining:
+                        yield {"type": "stream", "content": remaining}
                     _text_buf = ""
 
                     # 推送 executing 状态
@@ -162,19 +226,21 @@ class BrowserAgent:
                         "result_buf": "",
                         "step": _step_index,
                     }
-                    _step_index += 1
-                    yield {
-                        "type": "event",
-                        "event": {
-                            "type": "step",
-                            "data": {
-                                "action": evt.tool_call_name,
-                                "step": _tool_calls[tid]["step"],
-                                "status": "running",
+                    # done 是元工具(标记完成并转发汇报)，其 text 应进回复气泡，不显示工具步骤卡片
+                    if evt.tool_call_name != "done":
+                        _step_index += 1
+                        yield {
+                            "type": "event",
+                            "event": {
+                                "type": "step",
+                                "data": {
+                                    "action": evt.tool_call_name,
+                                    "step": _tool_calls[tid]["step"],
+                                    "status": "running",
+                                },
+                                "timestamp": 0,
                             },
-                            "timestamp": 0,
-                        },
-                    }
+                        }
 
                 elif evt.type == EventType.TOOL_CALL_DELTA:
                     tc = _tool_calls.get(evt.tool_call_id)
@@ -188,7 +254,16 @@ class BrowserAgent:
 
                 elif evt.type == EventType.TOOL_RESULT_END:
                     tc = _tool_calls.get(evt.tool_call_id)
-                    if tc:
+                    is_done = tc is not None and tc["name"] == "done"
+                    if is_done:
+                        # done 的 text 是给用户的最终汇报，推送到回复气泡，不进工具步骤卡片
+                        try:
+                            parsed_args = json.loads(tc["args_buf"]) if tc["args_buf"] else {}
+                        except (json.JSONDecodeError, TypeError):
+                            parsed_args = {}
+                        if isinstance(parsed_args, dict) and parsed_args.get("text"):
+                            yield {"type": "stream", "content": parsed_args["text"]}
+                    elif tc:
                         try:
                             parsed_args = json.loads(tc["args_buf"]) if tc["args_buf"] else {}
                         except (json.JSONDecodeError, TypeError):
@@ -208,21 +283,35 @@ class BrowserAgent:
                                 "timestamp": 0,
                             },
                         }
+                    # 非 done 工具结束后切回 thinking；done 标志任务结束
+                    if not is_done:
+                        yield {
+                            "type": "event",
+                            "event": {"type": "activity_status", "data": {"status": "thinking"}},
+                        }
 
-                    # 工具调用结束后推送 thinking 状态
-                    yield {
-                        "type": "event",
-                        "event": {"type": "activity_status", "data": {"status": "thinking"}},
-                    }
-
-            # 流式结束后推送最终 reflection
-            reflection = self._parse_reflection(_text_buf)
+            # 流式结束后分离剩余文本：reflection 进步骤卡片，回复文本进气泡
+            reflection, remaining = self._drain_reflection(_text_buf)
             if reflection:
                 yield {
                     "type": "event",
                     "event": {"type": "reflection", "data": reflection, "timestamp": 0},
                 }
+            if remaining:
+                yield {"type": "stream", "content": remaining}
 
+            # 发送本轮对话的 token 消耗汇总（在 [DONE] 之前，前端定稿前收到）
+            yield {
+                "type": "event",
+                "event": {
+                    "type": "token_usage",
+                    "data": {
+                        "input": _total_input_tokens,
+                        "output": _total_output_tokens,
+                    },
+                    "timestamp": 0,
+                },
+            }
             yield {"type": "stream", "content": "[DONE]"}
             yield {
                 "type": "event",

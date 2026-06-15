@@ -69,6 +69,21 @@ npm run build
 
 Agent 会自动解析页面 DOM、定位元素、执行点击和输入操作。DOM 操作失败时会降级到截图分析 + 坐标点击。
 
+**新建会话**：SidePanel 顶部的「+」按钮用于新建会话。点击后后端会重建对话上下文（清空历史、换新会话 ID），开始一段全新对话；若此时 Agent 正在执行任务，会先停止当前任务再重置。历史会话仍保留在前端历史记录中，可随时回看。
+
+**技能（Skill）**：SidePanel 输入框下方有一个「✦ 技能」按钮。点击会弹出当前可用技能列表（名称 + 描述），选中某项后会在输入框填入 `/skill <技能名> `（光标停在末尾），你可以补充具体任务再发送。Agent 会自动读取该技能的完整指令并按其执行。
+
+技能是一份 `SKILL.md` 指令文档（带 YAML frontmatter 的 `name`/`description` + markdown 正文）。后端默认从 `agent-core/skills/` 目录加载（递归扫描子目录），可在 `agent-core/config.yaml` 的 `skills.dirs` 追加更多目录：
+
+```yaml
+skills:
+  dirs:
+    - "./skills"
+    - "/path/to/your/skills"   # 自定义目录
+```
+
+新增技能：在已配置的目录下创建 `<技能名>/SKILL.md`，重启后端即可。示例见 `agent-core/skills/example/SKILL.md`。
+
 ## 配置
 
 ### 后端配置（agent-core）

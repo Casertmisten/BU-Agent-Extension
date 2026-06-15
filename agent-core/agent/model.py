@@ -17,6 +17,7 @@ from logger import get_logger
 log = get_logger("model")
 
 
+<<<<<<< HEAD
 # ---------------------------------------------------------------------------
 # 自定义本地模型凭证（OpenAI 兼容协议，如 vLLM / LM Studio 等）
 # ---------------------------------------------------------------------------
@@ -56,22 +57,42 @@ def create_model(config: dict, role: str = ""):
     Args:
         config: 包含 provider、model、api_key 等字段的字典。
         role: 模型角色标识，如 "LLM"、"VLM"。
+=======
+def create_model(config: dict, role: str | None = None):
+    """根据配置字典创建模型实例。
+
+    Args:
+        config: 包含 provider、model、api_key 的字典。
+        role: 模型角色标识（如 LLM/VLM），仅用于日志。
+>>>>>>> origin/mac-master
 
     Returns:
         agentscope 模型实例。
     """
     provider = config["provider"]
     model_name = config["model"]
+<<<<<<< HEAD
     prefix = f"[{role}] " if role else ""
 
     if provider == "openai":
         log.info("%s加载模型: %s", prefix, model_name)
+=======
+    api_key = config["api_key"]
+    role_tag = f"[{role}] " if role else ""
+
+    if provider == "openai":
+        log.info("%s加载模型: %s", role_tag, model_name)
+>>>>>>> origin/mac-master
         return OpenAIChatModel(
             credential=OpenAICredential(api_key=config["api_key"]),
             model=model_name,
         )
     elif provider == "dashscope":
+<<<<<<< HEAD
         log.info("%s加载模型: %s", prefix, model_name)
+=======
+        log.info("%s加载模型: %s", role_tag, model_name)
+>>>>>>> origin/mac-master
         return DashScopeChatModel(
             credential=DashScopeCredential(api_key=config["api_key"]),
             model=model_name,

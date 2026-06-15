@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import '../content/content.js';
+import '../public/content/content.js';
+import {
+  inferRole, computeName, isHidden, isInteractive,
+} from '../public/content/ax-helpers.js';
 
 const {
   tagElements, clearTags, get_element_info,
   clickElement, inputText, scrollPage,
   enableOverlay, disableOverlay,
 } = window.__BU_AGENT__;
+const { parsePage } = window.__BU_AGENT__;
 
 describe('tagElements', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
@@ -125,5 +129,169 @@ describe('overlay', () => {
     enableOverlay();
     expect(document.querySelectorAll('#__agent_overlay__').length).toBe(1);
     disableOverlay();
+  });
+});
+
+describe('AX inference', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  describe('inferRole', () => {
+    it('显式 role 属性优先', () => {
+      document.body.innerHTML = '<div role="navigation"></div>';
+      expect(inferRole(document.body.firstChild)).toBe('navigation');
+    });
+    it('HTML 语义标签映射', () => {
+      document.body.innerHTML = '<button>x</button><a href="#">y</a><h1>t</h1>';
+      expect(inferRole(document.body.children[0])).toBe('button');
+      expect(inferRole(document.body.children[1])).toBe('link');
+      expect(inferRole(document.body.children[2])).toBe('heading');
+    });
+    it('input 按 type 映射', () => {
+      document.body.innerHTML = '<input type="email"><input type="checkbox">';
+      expect(inferRole(document.body.children[0])).toBe('textbox');
+      expect(inferRole(document.body.children[1])).toBe('checkbox');
+    });
+    it('无语义容器返回 null', () => {
+      document.body.innerHTML = '<div></div><span></span>';
+      expect(inferRole(document.body.children[0])).toBeNull();
+      expect(inferRole(document.body.children[1])).toBeNull();
+    });
+    it('body 推断为 WebArea', () => {
+      document.title = 'Test';
+      expect(inferRole(document.body)).toBe('WebArea');
+    });
+    it('a 无 href 返回 null', () => {
+      document.body.innerHTML = '<a>no link</a>';
+      expect(inferRole(document.body.firstChild)).toBeNull();
+    });
+  });
+
+  describe('computeName', () => {
+    it('aria-label 优先', () => {
+      document.body.innerHTML = '<button aria-label="提交">Submit</button>';
+      expect(computeName(document.body.firstChild)).toBe('提交');
+    });
+    it('label for 关联表单字段', () => {
+      document.body.innerHTML = '<label for="e">邮箱</label><input id="e" type="email">';
+      expect(computeName(document.body.children[1])).toBe('邮箱');
+    });
+    it('包裹式 label', () => {
+      document.body.innerHTML = '<label>搜索<input type="text"></label>';
+      const input = document.querySelector('input');
+      expect(computeName(input)).toBe('搜索');
+    });
+    it('textContent 兜底', () => {
+      document.body.innerHTML = '<h1>用户登录</h1>';
+      expect(computeName(document.body.firstChild)).toBe('用户登录');
+    });
+    it('placeholder 兜底', () => {
+      document.body.innerHTML = '<input type="text" placeholder="请输入">';
+      expect(computeName(document.body.firstChild)).toBe('请输入');
+    });
+    it('长文本截断到 200 字', () => {
+      const long = 'a'.repeat(300);
+      document.body.innerHTML = `<h1>${long}</h1>`;
+      expect(computeName(document.body.firstChild).length).toBe(200);
+    });
+    it('无任何来源返回空串', () => {
+      document.body.innerHTML = '<input type="text">';
+      expect(computeName(document.body.firstChild)).toBe('');
+    });
+  });
+
+  describe('isHidden', () => {
+    it('hidden 属性', () => {
+      document.body.innerHTML = '<div hidden></div>';
+      expect(isHidden(document.body.firstChild)).toBe(true);
+    });
+    it('aria-hidden', () => {
+      document.body.innerHTML = '<div aria-hidden="true"></div>';
+      expect(isHidden(document.body.firstChild)).toBe(true);
+    });
+    it('display:none', () => {
+      document.body.innerHTML = '<div style="display:none"></div>';
+      expect(isHidden(document.body.firstChild)).toBe(true);
+    });
+    it('可见元素返回 false', () => {
+      document.body.innerHTML = '<div>可见</div>';
+      expect(isHidden(document.body.firstChild)).toBe(false);
+    });
+  });
+
+  describe('isInteractive', () => {
+    it('可交互 role 返回 true', () => {
+      expect(isInteractive('button')).toBe(true);
+      expect(isInteractive('link')).toBe(true);
+      expect(isInteractive('textbox')).toBe(true);
+    });
+    it('非可交互 role 返回 false', () => {
+      expect(isInteractive('heading')).toBe(false);
+      expect(isInteractive('main')).toBe(false);
+    });
+  });
+});
+
+describe('parsePage', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('输出嵌套 AX 树，顶层为 WebArea', () => {
+    document.title = '测试页';
+    document.body.innerHTML = '<button>登录</button>';
+    const tree = parsePage();
+    expect(tree.role).toBe('WebArea');
+    expect(tree.name).toBe('测试页');
+    expect(tree.children[0].role).toBe('button');
+  });
+
+  it('给可交互节点赋 agent-xx 并写入 DOM', () => {
+    document.body.innerHTML = '<button>登录</button><h1>标题</h1>';
+    const tree = parsePage();
+    const btnNode = tree.children.find((c) => c.role === 'button');
+    expect(btnNode.id).toMatch(/^agent-\d{2}$/);
+    expect(document.querySelector('[backend-id="' + btnNode.id + '"]')).not.toBeNull();
+  });
+
+  it('纯文本/标题节点不赋 agent-xx', () => {
+    document.body.innerHTML = '<h1>标题</h1><p>段落</p>';
+    const tree = parsePage();
+    const heading = tree.children.find((c) => c.role === 'heading');
+    expect(heading.id).toBeUndefined();
+    expect(document.querySelectorAll('[backend-id]').length).toBe(0);
+  });
+
+  it('隐藏节点被剪枝', () => {
+    document.body.innerHTML = '<button>可见</button><div style="display:none"><button>隐藏</button></div>';
+    const tree = parsePage();
+    const labels = JSON.stringify(tree);
+    expect(labels).toContain('可见');
+    expect(labels).not.toContain('隐藏');
+  });
+
+  it('容器被剪但子节点上浮', () => {
+    document.body.innerHTML = '<div><button>登录</button></div>';
+    const tree = parsePage();
+    expect(tree.children[0].role).toBe('button');
+    expect(tree.children[0].name).toBe('登录');
+  });
+
+  it('accessible name 优先级：aria-label 胜过 textContent', () => {
+    document.body.innerHTML = '<button aria-label="提交">Submit</button>';
+    const tree = parsePage();
+    expect(tree.children[0].name).toBe('提交');
+  });
+
+  it('重新调用先清理旧标记', () => {
+    document.body.innerHTML = '<button>A</button>';
+    parsePage();
+    document.body.innerHTML = '<button>B</button><button>C</button>';
+    parsePage();
+    expect(document.querySelectorAll('[backend-id]').length).toBe(2);
+  });
+
+  it('body 为空返回空 children', () => {
+    document.body.innerHTML = '';
+    const tree = parsePage();
+    expect(tree.role).toBe('WebArea');
+    expect(tree.children).toEqual([]);
   });
 });

@@ -12,7 +12,7 @@ import { saveSession } from '@/lib/idb'
 
 export default function App() {
   const [view, setView] = useState<View>({ name: 'chat' })
-  const { status, sendTask, messages, isStreaming, stopStream, clearMessages, activityStatus } = useWebSocket()
+  const { status, sendTask, messages, isStreaming, stopStream, clearMessages, activityStatus, skills } = useWebSocket()
   const { config, saveConfig } = useConfig()
   const prevStreamingRef = useRef(isStreaming)
 
@@ -30,11 +30,6 @@ export default function App() {
       )
     }
   }, [isStreaming, messages])
-
-  const handleRerun = useCallback((task: string) => {
-    setView({ name: 'chat' })
-    sendTask(task)
-  }, [sendTask])
 
   const handleSaveConfig = useCallback((newConfig: AppConfig) => {
     saveConfig(newConfig)
@@ -56,7 +51,6 @@ export default function App() {
         <HistoryList
           onSelect={(id) => setView({ name: 'history-detail', sessionId: id })}
           onBack={() => setView({ name: 'chat' })}
-          onRerun={handleRerun}
         />
       </div>
     )
@@ -68,7 +62,6 @@ export default function App() {
         <HistoryDetail
           sessionId={view.sessionId}
           onBack={() => setView({ name: 'history' })}
-          onRerun={handleRerun}
         />
       </div>
     )
@@ -92,7 +85,7 @@ export default function App() {
       </header>
 
 
-      <ChatView messages={messages} isStreaming={isStreaming} sendTask={sendTask} stopStream={stopStream} activityStatus={activityStatus} />
+      <ChatView messages={messages} isStreaming={isStreaming} sendTask={sendTask} stopStream={stopStream} activityStatus={activityStatus} skills={skills} />
 
       <footer className="text-center py-1.5 text-[11px] text-muted-foreground border-t">
         版本 v0.2.0

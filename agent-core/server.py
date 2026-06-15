@@ -56,6 +56,15 @@ async def handle_client(websocket, config: dict):
     agent = _get_or_create_agent(config)
     agent.attach_ws(websocket)
 
+    # 握手后推送一次技能清单（技能是全局静态能力，与会话无关）。
+    # 失败不阻断连接——前端 skills 保持空，按钮仍可点（显示空列表）。
+    try:
+        skills = await agent.list_skills()
+        await websocket.send(json.dumps({"type": "skills_list", "skills": skills}))
+        log.info("已推送技能清单，共 %d 个技能", len(skills))
+    except Exception as e:
+        log.warning("推送技能列表失败: %s", e)
+
     # 重连时通知前端之前的状态已丢失
     if agent._busy:
         log.warning("重连时 Agent 仍在执行，前端可能需要刷新状态")
@@ -89,6 +98,22 @@ async def handle_client(websocket, config: dict):
                     _run_agent_and_send(agent, msg.get("content", ""))
                 )
 
+            elif msg_type == "new_session":
+                if _current_task and not _current_task.done():
+                    _current_task.cancel()
+                    try:
+                        await _current_task  # 确保旧任务彻底结束，避免残留 append 污染新上下文
+                    except (asyncio.CancelledError, Exception):
+                        pass  # 丢弃旧任务的取消/异常，不阻断新建会话；不吞 KeyboardInterrupt/SystemExit
+                    _current_task = None
+                    # 旧任务被打断，通知前端关闭遮罩
+                    await websocket.send(json.dumps({
+                        "type": "event",
+                        "event": {"type": "activity_status", "data": {"status": "done"}},
+                    }))
+                agent.reset_context()
+                log.info("已新建会话，上下文已重置")
+
             elif msg_type == "stop":
                 if _current_task and not _current_task.done():
                     _current_task.cancel()
@@ -121,6 +146,7 @@ async def main():
         lambda ws: handle_client(ws, config),
         host,
         port,
+        max_size=16 * 1024 * 1024,  # 16MB，支持高 DPI 全屏截图(base64)回传，默认 1MB 会被 websockets 关闭连接
     ):
         await asyncio.Future()  # 永久运行
 

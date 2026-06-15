@@ -22,25 +22,30 @@ export default defineBackground(() => {
 
   // WS 消息路由
   let isStreamingActive = false
+  // 缓存后端推送的技能清单：skills_list 仅在连接时推送一次，sidepanel 可能晚于
+  // 推送打开，需缓存以便 sidepanel 挂载时通过 get_skills 拉取（仿 get_status 模式）。
+  let cachedSkills: unknown[] = []
 
   wsClient.onMessage((msg) => {
     const type = msg.type as string
     if (type === 'action') {
       handleAction(msg as Record<string, unknown> & { action: string; task_id: string })
     } else if (type === 'stream') {
-      const streamContent = (msg as any).content as string
-      // 流式开始时启用遮罩
-      if (!isStreamingActive && streamContent !== '[DONE]') {
-        isStreamingActive = true
-        sendToContentScript({ action: 'enable_overlay' })
-      }
-      // 流式结束时关闭遮罩
-      if (streamContent === '[DONE]') {
-        isStreamingActive = false
-        sendToContentScript({ action: 'disable_overlay' })
-      }
       chrome.runtime.sendMessage(msg).catch(() => {})
     } else if (type === 'event') {
+      // activity_status 事件驱动遮罩：thinking/executing 显示，done/error 隐藏。
+      // 不依赖 stream 文本，避免模型直接工具调用（无文本输出）时遮罩不显示。
+      const evt = (msg as any).event
+      if (evt?.type === 'activity_status') {
+        const status = evt.data?.status
+        if ((status === 'thinking' || status === 'executing') && !isStreamingActive) {
+          isStreamingActive = true
+          sendToContentScript({ action: 'enable_overlay' })
+        } else if ((status === 'done' || status === 'error') && isStreamingActive) {
+          isStreamingActive = false
+          sendToContentScript({ action: 'disable_overlay' })
+        }
+      }
       // 转发 agent 事件（step/reflection/activity_status）到 sidepanel
       chrome.runtime.sendMessage(msg).catch(() => {})
     } else if (type === 'error') {
@@ -49,6 +54,10 @@ export default defineBackground(() => {
         isStreamingActive = false
         sendToContentScript({ action: 'disable_overlay' })
       }
+      chrome.runtime.sendMessage(msg).catch(() => {})
+    } else if (type === 'skills_list') {
+      // 缓存并转发后端推送的技能清单到 sidepanel
+      cachedSkills = (msg as any).skills ?? []
       chrome.runtime.sendMessage(msg).catch(() => {})
     }
   })
@@ -66,7 +75,7 @@ export default defineBackground(() => {
     try {
       let result
       switch (action) {
-        case 'parse_dom': case 'get_element_info': case 'click': case 'input_text': case 'scroll': case 'scroll_element': case 'extract_content':
+        case 'parse_page': case 'parse_dom': case 'get_element_info': case 'click': case 'input_text': case 'scroll': case 'scroll_element': case 'extract_content':
           result = await executeInContentScript(msg); break
         case 'screenshot': result = await handleScreenshot(); break
         case 'navigate': result = await handleNavigate(msg.url as string); break
@@ -105,9 +114,37 @@ export default defineBackground(() => {
     const tab = await getActiveTab()
     if (!tab) return { status: 'error', error: 'No active tab' }
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' })
-    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '')
+    // 等比缩放到不超过 1920×1080 并转 JPEG(0.85)，减小回传体积供后端 VLM 识别
+    const base64 = await compressImage(dataUrl, 1920, 1080)
     const dpr = await getPageDpr(tab.id!)
     return { status: 'success', data: { image: base64, viewport: { dpr, width: tab.width, height: tab.height } } }
+  }
+
+  /** 将 dataUrl 图片等比缩放到不超过 maxW×maxH（不放大），输出 JPEG 纯 base64。 */
+  async function compressImage(dataUrl: string, maxW: number, maxH: number): Promise<string> {
+    const blob = await (await fetch(dataUrl)).blob()
+    const bitmap = await createImageBitmap(blob)
+    const scale = Math.min(maxW / bitmap.width, maxH / bitmap.height, 1)
+    const w = Math.round(bitmap.width * scale)
+    const h = Math.round(bitmap.height * scale)
+    const canvas = new OffscreenCanvas(w, h)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('OffscreenCanvas 2D context unavailable')
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    bitmap.close()
+    const outBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 })
+    return blobToBase64(outBlob)
+  }
+
+  /** 将 Blob 编码为纯 base64 字符串（service worker 无 FileReader，手动编码）。 */
+  async function blobToBase64(blob: Blob): Promise<string> {
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    let binary = ''
+    const chunk = 0x8000
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+    }
+    return btoa(binary)
   }
 
   async function getPageDpr(tabId: number) {
@@ -178,6 +215,10 @@ export default defineBackground(() => {
     if (message.type === 'get_status') {
       sendResponse({ connected: wsClient.isConnected() })
     }
+    if (message.type === 'get_skills') {
+      // sidepanel 挂载时拉取缓存的技能清单（见 cachedSkills 注释）
+      sendResponse({ skills: cachedSkills })
+    }
     if (message.type === 'stop') {
       // 转发停止指令给后端 agent
       wsClient.send({ type: 'stop' })
@@ -186,6 +227,15 @@ export default defineBackground(() => {
         sendToContentScript({ action: 'disable_overlay' })
       }
       sendResponse({ stopped: true })
+    }
+    if (message.type === 'new_session') {
+      // 转发新建会话指令给后端，并乐观关闭遮罩
+      wsClient.send({ type: 'new_session' })
+      if (isStreamingActive) {
+        isStreamingActive = false
+        sendToContentScript({ action: 'disable_overlay' })
+      }
+      sendResponse({ received: true })
     }
     return false
   })

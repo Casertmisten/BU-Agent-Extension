@@ -3,6 +3,12 @@ import os
 import pytest
 from config_loader import load_config
 
+# agent-core 目录的绝对路径（__file__ 为 tests/test_config_loader.py），
+# 使 config.yaml 解析不依赖 pytest 的 CWD。
+_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"
+)
+
 
 def test_load_config_reads_yaml(tmp_path):
     config_file = tmp_path / "config.yaml"
@@ -38,3 +44,10 @@ llm:
     config = load_config(str(config_file))
     assert config["llm"]["api_key"] == "env-key-123"
     del os.environ["TEST_BU_KEY"]
+
+
+def test_skills_config_has_default_dir():
+    """config.yaml 应包含 skills.dirs，默认含 ./skills。"""
+    config = load_config(_CONFIG_PATH)
+    assert "skills" in config
+    assert "./skills" in config["skills"]["dirs"]
