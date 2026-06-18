@@ -26,6 +26,37 @@ export function useWebSocket(): UseWebSocketReturn {
   const [skills, setSkills] = useState<SkillInfo[]>([])
 
   const streamingRef = useRef<Message | null>(null)
+  // rAF 节流：逐 token 流式下每个 delta 都会触发 setMessages + ReactMarkdown 重解析，
+  // 长文本会掉帧。把同一帧内多个 delta 合并成一次 setMessages（约 16ms 一次）。
+  const rafRef = useRef<number | null>(null)
+
+  /** 同步把 streamingRef 快照刷进 messages 状态（合并一帧内所有 delta 为一次渲染）。 */
+  const flushStream = useCallback(() => {
+    const streaming = streamingRef.current
+    if (!streaming) return
+    const snapshot = { ...streaming }
+    setMessages((prev) => {
+      const without = prev.filter((m) => m.id !== snapshot.id)
+      return [...without, snapshot]
+    })
+  }, [])
+
+  /** 调度一帧后的刷新，同帧多次调用只排一次 rAF。 */
+  const scheduleFlush = useCallback(() => {
+    if (rafRef.current != null) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null
+      flushStream()
+    })
+  }, [flushStream])
+
+  /** 取消挂起的刷新并清空 id（定稿/中断路径调用）。 */
+  const cancelFlush = useCallback(() => {
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+  }, [])
 
   // 定时轮询连接状态
   useEffect(() => {
@@ -60,6 +91,8 @@ export function useWebSocket(): UseWebSocketReturn {
         const content = message.content ?? ''
 
         if (content === '[DONE]') {
+          // 定稿前先取消挂起的 rAF 并同步落盘残余 delta，避免最后一帧丢失
+          cancelFlush()
           const streaming = streamingRef.current
           if (streaming) {
             streaming.status = 'done'
@@ -76,6 +109,7 @@ export function useWebSocket(): UseWebSocketReturn {
         }
 
         if (content === '[BUSY]') {
+          cancelFlush()
           setMessages((prev) => [
             ...prev,
             { id: uid(), role: 'system', content: 'Agent 正在工作中，请等待...', timestamp: Date.now() },
@@ -83,7 +117,7 @@ export function useWebSocket(): UseWebSocketReturn {
           return
         }
 
-        // 流式追加
+        // 流式追加：先标记流式态（思考指示器/遮罩即时响应），再累积文本，rAF 节流刷新 UI
         setIsStreaming(true)
         let streaming = streamingRef.current
         if (!streaming) {
@@ -98,15 +132,16 @@ export function useWebSocket(): UseWebSocketReturn {
         } else {
           streaming.content += content
         }
-        // 快照当前 streaming，避免闭包问题
-        const snapshot = { ...streaming }
-        setMessages((prev) => {
-          const without = prev.filter((m) => m.id !== snapshot.id)
-          return [...without, snapshot]
-        })
+        // 首段 delta 立即刷新（建气泡），后续合并到下一帧，降低 ReactMarkdown 重解析频率
+        if (streaming.content === content) {
+          flushStream()
+        } else {
+          scheduleFlush()
+        }
       }
 
       if (message.type === 'error') {
+        cancelFlush()
         setError(message.error ?? '未知错误')
         streamingRef.current = null
         setIsStreaming(false)
@@ -158,8 +193,11 @@ export function useWebSocket(): UseWebSocketReturn {
     }
 
     chrome.runtime.onMessage.addListener(listener)
-    return () => chrome.runtime.onMessage.removeListener(listener)
-  }, [])
+    return () => {
+      cancelFlush()
+      chrome.runtime.onMessage.removeListener(listener)
+    }
+  }, [cancelFlush])
 
   const sendTask = useCallback((content: string) => {
     const userMsg: Message = {
@@ -175,6 +213,7 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [])
 
   const stopStream = useCallback(() => {
+    cancelFlush()
     const streaming = streamingRef.current
     if (streaming) {
       streaming.status = 'done'
@@ -188,9 +227,10 @@ export function useWebSocket(): UseWebSocketReturn {
     setActivityStatus('idle')
     // 通知 background 停止后端 agent
     chrome.runtime.sendMessage({ type: 'stop' })
-  }, [])
+  }, [cancelFlush])
 
 const clearMessages = useCallback(() => {
+    cancelFlush()
     // 通知后端开新会话（重置上下文）；停旧任务的职责由后端 new_session 分支承担
     chrome.runtime.sendMessage({ type: 'new_session' })
     setMessages([])
@@ -198,7 +238,7 @@ const clearMessages = useCallback(() => {
     setIsStreaming(false)
     setError(null)
     setActivityStatus('idle')
-  }, [])
+  }, [cancelFlush])
 
   return { status, sendTask, messages, isStreaming, stopStream, error, clearMessages, activityStatus, skills }
 }

@@ -22,6 +22,109 @@ from logger import get_logger
 log = get_logger("agent")
 
 
+class ReflectionFilter:
+    """增量分离 reflection JSON 与回复文本，替代整段缓冲。
+
+    模型每轮先输出一个 reflection JSON 块（进步骤卡片），其后才是回复文本（进气泡）。
+    逐 delta 分类，避免把回复文本也一并缓冲到工具调用边界才发出（块状输出）：
+
+    - scanning：跳过前导空白。首个非空白字符是 ``{`` → 进入 in_json；否则连同
+      前导空白作为回复文本流式发出，进入 passthrough。
+    - in_json：累积字符并跟踪大括号深度（忽略字符串内的 ``{}`` 与转义）。
+      顶层 ``}`` 闭合后用 drain_fn 判定：成功 → 产出 reflection 并丢弃 JSON 块；
+      失败 → 整块作为回复文本发出。随后进入 passthrough。
+    - passthrough：后续每个 delta 立即流式发出，零缓冲。
+
+    flush() 在 TOOL_CALL_START / 流结束时收尾：解析残余缓冲并重置状态，
+    同一实例可复用于下一轮模型输出。
+    """
+
+    def __init__(self, drain_fn):
+        self._drain = drain_fn
+        self._reset()
+
+    def _reset(self):
+        self._hold = ""
+        self._state = "scanning"   # scanning | in_json | passthrough
+        self._depth = 0            # JSON 大括号深度
+        self._in_string = False    # 是否处于 JSON 字符串内
+        self._escape = False       # 字符串内是否转义下一字符
+
+    def feed(self, delta: str) -> tuple[dict | None, str]:
+        """处理一段 delta，返回 (reflection 或 None, 可流式发出的文本)。"""
+        if self._state == "passthrough":
+            return None, delta
+
+        out: list[str] = []
+        reflection: dict | None = None
+        i = 0
+        n = len(delta)
+        while i < n and self._state != "passthrough":
+            ch = delta[i]
+            if self._state == "scanning":
+                if ch.isspace():
+                    self._hold += ch
+                elif ch == "{":
+                    self._state = "in_json"
+                    self._depth = 1
+                    self._hold = ch
+                else:
+                    # 不是 reflection：前导空白 + 本字符作为回复文本，进入直通
+                    out.append(self._hold + ch)
+                    self._hold = ""
+                    self._state = "passthrough"
+            else:  # in_json
+                self._hold += ch
+                if self._in_string:
+                    if self._escape:
+                        self._escape = False
+                    elif ch == "\\":
+                        self._escape = True
+                    elif ch == '"':
+                        self._in_string = False
+                else:
+                    if ch == '"':
+                        self._in_string = True
+                    elif ch == "{":
+                        self._depth += 1
+                    elif ch == "}":
+                        self._depth -= 1
+                        if self._depth == 0:
+                            # JSON 闭合：判定是否 reflection
+                            refl, remaining = self._drain(self._hold)
+                            if refl is not None:
+                                reflection = refl
+                                if remaining:
+                                    out.append(remaining)
+                            else:
+                                # 非法/非 reflection JSON，整块当文本发出
+                                out.append(self._hold)
+                            self._hold = ""
+                            self._state = "passthrough"
+            i += 1
+
+        # 进入 passthrough 后，本段 delta 剩余部分一次性直通
+        if self._state == "passthrough" and i < n:
+            out.append(delta[i:])
+
+        return reflection, "".join(out)
+
+    def flush(self) -> tuple[dict | None, str]:
+        """收尾：解析残余缓冲并重置状态，返回 (reflection 或 None, 残留文本)。"""
+        if self._state == "scanning":
+            self._reset()
+            return None, ""
+        if self._state == "in_json":
+            hold = self._hold
+            refl, remaining = self._drain(hold)
+            self._reset()
+            if refl is not None:
+                return refl, remaining
+            return None, hold
+        self._reset()
+        return None, ""
+
+
 class BrowserAgent:
     """浏览器自动化 Agent。
 
@@ -183,7 +286,8 @@ class BrowserAgent:
         log.info("Agent 收到指令: %.100s", text)
         _tool_calls: dict[str, dict] = {}
         _step_index = 0
-        _text_buf = ""
+        # 增量分离 reflection 与回复文本：reflection 进步骤卡片，回复文本逐 token 进气泡
+        _filter = ReflectionFilter(self._drain_reflection)
         _total_input_tokens = 0
         _total_output_tokens = 0
 
@@ -202,13 +306,19 @@ class BrowserAgent:
                     _total_input_tokens += evt.input_tokens
                     _total_output_tokens += evt.output_tokens
                 elif evt.type == EventType.TEXT_BLOCK_DELTA:
-                    # 缓冲文本，不立即推送：需在工具调用/流结束时区分 reflection（进步骤卡片）
-                    # 与回复文本（进气泡），避免 reflection JSON 显示在回复气泡
-                    _text_buf += evt.delta
+                    # 逐 delta 分类：reflection（进步骤卡片）即时识别，回复文本（进气泡）零缓冲流式
+                    reflection, stream_text = _filter.feed(evt.delta)
+                    if reflection:
+                        yield {
+                            "type": "event",
+                            "event": {"type": "reflection", "data": reflection, "timestamp": 0},
+                        }
+                    if stream_text:
+                        yield {"type": "stream", "content": stream_text}
 
                 elif evt.type == EventType.TOOL_CALL_START:
-                    # 在工具调用前分离 reflection 与回复文本
-                    reflection, remaining = self._drain_reflection(_text_buf)
+                    # 工具调用前收尾：解析残余缓冲（未闭合的 JSON / 残留文本），重置过滤器
+                    reflection, remaining = _filter.flush()
                     if reflection:
                         yield {
                             "type": "event",
@@ -216,7 +326,6 @@ class BrowserAgent:
                         }
                     if remaining:
                         yield {"type": "stream", "content": remaining}
-                    _text_buf = ""
 
                     # 推送 executing 状态
                     yield {
@@ -295,8 +404,8 @@ class BrowserAgent:
                             "event": {"type": "activity_status", "data": {"status": "thinking"}},
                         }
 
-            # 流式结束后分离剩余文本：reflection 进步骤卡片，回复文本进气泡
-            reflection, remaining = self._drain_reflection(_text_buf)
+            # 流式结束收尾：解析残余缓冲（未闭合的 JSON / 残留文本），重置过滤器
+            reflection, remaining = _filter.flush()
             if reflection:
                 yield {
                     "type": "event",

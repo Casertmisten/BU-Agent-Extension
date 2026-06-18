@@ -183,6 +183,84 @@ async def test_reflection_event_emitted():
 
 
 @pytest.mark.asyncio
+async def test_reflection_filter_streaming():
+    """reflection JSON 被切成多个 delta 时仍识别为 reflection 事件；
+    其后的回复文本应作为多个独立 stream 事件逐段 yield（真流式，非整块）。"""
+    from unittest.mock import MagicMock, patch
+
+    agent = BrowserAgent(_make_config())
+    agent.init()
+
+    mock_events = []
+    # reflection JSON 拆成 3 个 delta（模拟逐 token 流式）
+    json_chunks = [
+        '{"evaluation_previous_goal": "成功"',
+        ', "memory": "记忆", "next_goal": "目标"}',
+    ]
+    for c in json_chunks:
+        evt = MagicMock()
+        evt.type = "TEXT_BLOCK_DELTA"
+        evt.delta = c
+        mock_events.append(evt)
+    # 回复文本拆成 2 个 delta
+    for c in ["这是给用户", "的回复"]:
+        evt = MagicMock()
+        evt.type = "TEXT_BLOCK_DELTA"
+        evt.delta = c
+        mock_events.append(evt)
+
+    with patch.object(agent._agent, "reply_stream", return_value=AsyncIteratorMock(mock_events)):
+        events = []
+        async for evt in agent.run("测试"):
+            events.append(evt)
+
+    # reflection 恰好一个
+    reflections = [e for e in events if e.get("type") == "event" and e["event"]["type"] == "reflection"]
+    assert len(reflections) == 1
+    assert reflections[0]["event"]["data"]["next_goal"] == "目标"
+
+    # 回复文本：应被分成两段 stream 事件（逐段流式），而非合并成一整块
+    streams = [e for e in events if e.get("type") == "stream" and e.get("content") not in ("[DONE]",)]
+    assert len(streams) == 2
+    assert streams[0]["content"] == "这是给用户"
+    assert streams[1]["content"] == "的回复"
+
+    # 顺序：reflection 在所有 stream 之前
+    refl_idx = events.index(reflections[0])
+    for s in streams:
+        assert events.index(s) > refl_idx
+
+
+@pytest.mark.asyncio
+async def test_reflection_filter_plain_text_streams_directly():
+    """前置非 JSON 文本（无 reflection）时，每个 delta 应直接流式发出，不缓冲。"""
+    from unittest.mock import MagicMock, patch
+
+    agent = BrowserAgent(_make_config())
+    agent.init()
+
+    mock_events = []
+    for c in ["你好", "，", "世界"]:
+        evt = MagicMock()
+        evt.type = "TEXT_BLOCK_DELTA"
+        evt.delta = c
+        mock_events.append(evt)
+
+    with patch.object(agent._agent, "reply_stream", return_value=AsyncIteratorMock(mock_events)):
+        events = []
+        async for evt in agent.run("测试"):
+            events.append(evt)
+
+    # 无 reflection 事件
+    reflections = [e for e in events if e.get("type") == "event" and e["event"]["type"] == "reflection"]
+    assert len(reflections) == 0
+
+    # 三段各自独立流式发出
+    streams = [e for e in events if e.get("type") == "stream" and e.get("content") not in ("[DONE]",)]
+    assert [s["content"] for s in streams] == ["你好", "，", "世界"]
+
+
+@pytest.mark.asyncio
 async def test_parse_reflection():
     """测试 _parse_reflection 辅助方法。"""
     agent = BrowserAgent(_make_config())
