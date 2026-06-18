@@ -8,6 +8,158 @@
 
   let counter = 0;
 
+  // === AX 推断（与 ax-helpers.js 逻辑一致，content script 不支持 import，复制此份）===
+
+  var AX_INTERACTIVE = {
+    button:1, link:1, textbox:1, searchbox:1, checkbox:1, radio:1,
+    slider:1, spinbutton:1, switch:1, menuitem:1, menuitemcheckbox:1,
+    menuitemradio:1, tab:1, option:1, combobox:1, treeitem:1
+  };
+  var AX_VALID_ROLES = {
+    alert:1, application:1, article:1, banner:1, button:1, checkbox:1,
+    combobox:1, complementary:1, contentinfo:1, dialog:1, directory:1,
+    document:1, form:1, grid:1, gridcell:1, group:1, heading:1, img:1,
+    image:1, link:1, list:1, listbox:1, listitem:1, main:1, menu:1,
+    menubar:1, menuitem:1, menuitemcheckbox:1, menuitemradio:1,
+    navigation:1, none:1, note:1, option:1, presentation:1, progressbar:1,
+    radio:1, radiogroup:1, region:1, row:1, rowgroup:1, search:1,
+    searchbox:1, separator:1, slider:1, spinbutton:1, status:1, switch:1,
+    tab:1, tablist:1, tabpanel:1, textbox:1, timer:1, toolbar:1, tooltip:1,
+    treeitem:1, tree:1, treegrid:1, table:1
+  };
+  var AX_TAG_ROLE = {
+    a: function(el){ return el.hasAttribute('href') ? 'link' : null; },
+    button: function(){ return 'button'; },
+    nav: function(){ return 'navigation'; },
+    main: function(){ return 'main'; },
+    header: function(){ return 'banner'; },
+    footer: function(){ return 'contentinfo'; },
+    aside: function(){ return 'complementary'; },
+    section: function(){ return 'region'; },
+    form: function(){ return 'form'; },
+    search: function(){ return 'search'; },
+    h1: function(){ return 'heading'; }, h2: function(){ return 'heading'; },
+    h3: function(){ return 'heading'; }, h4: function(){ return 'heading'; },
+    h5: function(){ return 'heading'; }, h6: function(){ return 'heading'; },
+    ul: function(){ return 'list'; }, ol: function(){ return 'list'; },
+    li: function(){ return 'listitem'; },
+    img: function(){ return 'image'; },
+    select: function(){ return 'combobox'; },
+    textarea: function(){ return 'textbox'; },
+    table: function(){ return 'table'; }
+  };
+  var AX_INPUT_TYPE_ROLE = {
+    email:'textbox', text:'textbox', password:'textbox', search:'searchbox',
+    tel:'textbox', url:'textbox', number:'spinbutton',
+    checkbox:'checkbox', radio:'radio', range:'slider'
+  };
+
+  function axTruncate(s, maxLen) {
+    maxLen = maxLen || 200;
+    return s.length > maxLen ? s.slice(0, maxLen) : s;
+  }
+  function axInferRole(el) {
+    if (el.tagName === 'BODY') return 'WebArea';
+    var explicit = el.getAttribute('role');
+    if (explicit && AX_VALID_ROLES[explicit]) return explicit;
+    var tag = el.tagName.toLowerCase();
+    if (tag === 'input') {
+      var type = (el.getAttribute('type') || 'text').toLowerCase();
+      return AX_INPUT_TYPE_ROLE[type] || null;
+    }
+    var mapper = AX_TAG_ROLE[tag];
+    return mapper ? mapper(el) : null;
+  }
+  function axComputeName(el) {
+    var labelledby = el.getAttribute('aria-labelledby');
+    if (labelledby) {
+      var target = document.getElementById(labelledby);
+      if (target) return axTruncate((target.textContent || '').trim());
+    }
+    var ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel) return axTruncate(ariaLabel);
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+      var id = el.id;
+      if (id) {
+        var label = document.querySelector('label[for="' + id + '"]');
+        if (label) return axTruncate((label.textContent || '').trim());
+      }
+      var wrapping = el.closest('label');
+      if (wrapping) return axTruncate((wrapping.textContent || '').trim());
+    }
+    var alt = el.getAttribute('alt');
+    if (alt) return axTruncate(alt);
+    var title = el.getAttribute('title');
+    if (title) return axTruncate(title);
+    var placeholder = el.getAttribute('placeholder');
+    if (placeholder) return axTruncate(placeholder);
+    if (el.textContent) return axTruncate(el.textContent.trim());
+    return '';
+  }
+  function axIsHidden(el) {
+    if (el.hasAttribute('hidden')) return true;
+    if (el.getAttribute('aria-hidden') === 'true') return true;
+    var style = window.getComputedStyle(el);
+    if (style.display === 'none') return true;
+    if (style.visibility === 'hidden') return true;
+    return false;
+  }
+  function axIsInteractive(role) {
+    return !!AX_INTERACTIVE[role];
+  }
+
+  function parsePage() {
+    clearTags();
+    counter = 0;
+    var children = buildAxChildren(document.body);
+    return {
+      role: 'WebArea',
+      name: document.title || '',
+      children: children
+    };
+  }
+
+  // 返回：node | array（上浮的子节点）| null
+  function buildAxNode(el) {
+    if (axIsHidden(el)) return null;
+    var role = axInferRole(el);
+
+    var children = buildAxChildren(el);
+
+    // role=null 的节点（div/span 等无语义容器）一律上浮子节点：
+    // 其 textContent/name 必然来自子节点，保留会造成冗余层级。
+    if (role === null) {
+      if (children.length === 0) return null;
+      return children;
+    }
+
+    var name = axComputeName(el);
+    var node = { role: role };
+    if (name) node.name = name;
+    if (axIsInteractive(role)) {
+      var id = 'agent-' + String(counter++).padStart(2, '0');
+      el.setAttribute('backend-id', id);
+      node.id = id;
+    }
+    if (children.length) node.children = children;
+    return node;
+  }
+
+  function buildAxChildren(el) {
+    var result = [];
+    var kids = el.children;
+    for (var i = 0; i < kids.length; i++) {
+      var built = buildAxNode(kids[i]);
+      if (!built) continue;
+      if (Array.isArray(built)) {
+        for (var j = 0; j < built.length; j++) result.push(built[j]);
+      } else {
+        result.push(built);
+      }
+    }
+    return result;
+  }
+
   function tagElements() {
     clearTags();
     counter = 0;
@@ -34,11 +186,42 @@
 
   function clearTags() {
     document.querySelectorAll('[backend-id]').forEach((el) => {
-      el.removeAttribute('backend-id');
-    });
+     el.removeAttribute('backend-id');
+   });
+ }
+
+  // === DOM 树剪枝解析（基于 dom-tree-engine + dom-serialize）===
+
+  function parseDomTree() {
+    clearTags();
+
+    var S = window.__DOM_SERIALIZE__;
+    if (!S) return { success: false, error: 'dom-serialize.js not loaded' };
+
+    var flatTree = S.getFlatTree({});
+    var content = S.flatTreeToString(flatTree, [], false);
+    var pi = S.getPageInfo();
+
+    // 给每个可交互元素设置 backend-id，兼容现有 click/input 流程
+    var selectorMap = S.getSelectorMap(flatTree);
+    for (var index in selectorMap) {
+      var node = selectorMap[index];
+      if (node.ref) {
+        var id = 'agent-' + String(parseInt(index, 10)).padStart(2, '0');
+        node.ref.setAttribute('backend-id', id);
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        text: content,
+        page_info: pi,
+      },
+    };
   }
 
-  function get_element_info(targetId) {
+ function get_element_info(targetId) {
     const el = document.querySelector(`[backend-id="${targetId}"]`);
     if (!el) return null;
 
@@ -148,16 +331,18 @@
   }
 
   // --- 暴露给测试和外部使用 ---
-  window.__BU_AGENT__ = {
-    tagElements,
-    clearTags,
-    get_element_info,
-    clickElement,
-    inputText,
-    scrollPage,
-    enableOverlay,
-    disableOverlay,
-  };
+ window.__BU_AGENT__ = {
+   tagElements,
+   parsePage,
+    parseDomTree,
+   clearTags,
+   get_element_info,
+   clickElement,
+   inputText,
+   scrollPage,
+   enableOverlay,
+   disableOverlay,
+ };
 
   // --- 消息监听 ---
   if (typeof chrome !== 'undefined' && chrome.runtime && !globalThis.__TEST__) {
@@ -168,9 +353,15 @@
       try {
         let result;
         switch (action) {
-          case 'parse_dom':
-            result = { success: true, data: { elements: tagElements() } };
+         case 'parse_page':
+           result = { success: true, data: { tree: parsePage() } };
+           break;
+          case 'parse_dom_tree':
+            result = parseDomTree();
             break;
+         case 'parse_dom':
+           result = { success: true, data: { elements: tagElements() } };
+           break;
           case 'get_element_info':
             result = { success: true, data: get_element_info(message.target_id) };
             break;

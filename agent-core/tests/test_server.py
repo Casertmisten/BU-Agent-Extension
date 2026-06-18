@@ -109,3 +109,30 @@ async def test_new_session_cancels_running_task_then_resets():
     finally:
         server._agent = None
         server._current_task = None
+
+
+@pytest.mark.asyncio
+async def test_skills_list_pushed_on_connect():
+    """连接握手后应推送 {type: skills_list, skills: [...]}。"""
+    import server
+
+    agent = _mock_agent()
+
+    async def _fake_list_skills():
+        return [{"name": "example", "description": "示例"}]
+
+    agent.list_skills = _fake_list_skills
+    server._agent = agent
+    server._current_task = None
+
+    try:
+        # 空消息列表：连接后立即结束（触发握手推送）
+        ws = FakeWS([])
+        await server.handle_client(ws, {})
+
+        skills_msgs = [json.loads(s) for s in ws.sent if json.loads(s).get("type") == "skills_list"]
+        assert len(skills_msgs) == 1
+        assert skills_msgs[0]["skills"] == [{"name": "example", "description": "示例"}]
+    finally:
+        server._agent = None
+        server._current_task = None

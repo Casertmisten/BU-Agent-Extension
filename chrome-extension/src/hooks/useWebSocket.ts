@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AgentEvent, ActivityStatus, BackgroundMessage, Message } from '@/types'
+import type { AgentEvent, ActivityStatus, BackgroundMessage, Message, SkillInfo } from '@/types'
 
 export interface UseWebSocketReturn {
   status: 'connected' | 'disconnected'
@@ -10,6 +10,7 @@ export interface UseWebSocketReturn {
   error: string | null
   clearMessages: () => void
   activityStatus: ActivityStatus
+  skills: SkillInfo[]
 }
 
 function uid(): string {
@@ -22,6 +23,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [isStreaming, setIsStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activityStatus, setActivityStatus] = useState<ActivityStatus>('idle')
+  const [skills, setSkills] = useState<SkillInfo[]>([])
 
   const streamingRef = useRef<Message | null>(null)
 
@@ -39,6 +41,16 @@ export function useWebSocket(): UseWebSocketReturn {
     poll()
     const timer = setInterval(poll, 3000)
     return () => clearInterval(timer)
+  }, [])
+
+  // 挂载时拉取一次技能清单：skills_list 仅在后端连接时推送，sidepanel 可能晚开，
+  // 需向 background 取缓存的副本（技能是静态的，无需轮询）。
+  useEffect(() => {
+    chrome.runtime.sendMessage({ type: 'get_skills' }, (res) => {
+      if (!chrome.runtime.lastError && res) {
+        setSkills((res.skills as SkillInfo[]) ?? [])
+      }
+    })
   }, [])
 
   // 监听 background 推送的消息
@@ -106,6 +118,10 @@ export function useWebSocket(): UseWebSocketReturn {
 
       if (message.type === 'status_update') {
         setStatus(message.status ?? 'disconnected')
+      }
+
+      if (message.type === 'skills_list') {
+        setSkills(message.skills ?? [])
       }
 
       if (message.type === 'event') {
@@ -184,5 +200,5 @@ const clearMessages = useCallback(() => {
     setActivityStatus('idle')
   }, [])
 
-  return { status, sendTask, messages, isStreaming, stopStream, error, clearMessages, activityStatus }
+  return { status, sendTask, messages, isStreaming, stopStream, error, clearMessages, activityStatus, skills }
 }

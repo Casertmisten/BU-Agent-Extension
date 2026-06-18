@@ -8,16 +8,15 @@ import json
 import re
 
 from agentscope.agent import Agent
-from agentscope.tool import Toolkit, FunctionTool
-from agentscope.message import UserMsg
+from agentscope.message import UserMsg, ToolResultState
 from agentscope.event import EventType
 from agentscope.state import AgentState
 from agentscope.permission import PermissionContext, PermissionMode
 
 from browser.connection import BrowserConnection
-from browser.tools import create_browser_tools
 from agent.model import create_model
 from agent.prompts import SYSTEM_PROMPT
+from agent.tools import create_toolkit, create_skill_loaders
 from logger import get_logger
 
 log = get_logger("agent")
@@ -39,6 +38,10 @@ class BrowserAgent:
         self._busy = False
         self._agent: Agent | None = None
         self._current_ws = None
+        # 技能加载器：用于 list_skills 直接查询（公开稳定 API），
+        # 避免依赖 toolkit 的私有方法 _get_available_skills。
+        # 与会话无关、全局静态，初始化时构建一次即可。
+        self._skill_loaders = create_skill_loaders(config)
 
     @property
     def conn(self) -> BrowserConnection:
@@ -61,13 +64,10 @@ class BrowserAgent:
         llm_model = create_model(self._config["llm"], role="LLM")
         vlm_model = create_model(self._config["vlm"], role="VLM")
 
-        # 创建并注册浏览器工具
-        tool_functions = create_browser_tools(
-            self._conn, vlm_model, self._viewport_info,
+        # 构建工具集（浏览器工具 + 技能），细节收敛在 agent.tools
+        toolkit = create_toolkit(
+            self._config, self._conn, vlm_model, self._viewport_info,
         )
-        tool_objects = [FunctionTool(fn) for fn in tool_functions.values()]
-        toolkit = Toolkit(tools=tool_objects)
-
         state = AgentState(
             permission_context=PermissionContext(mode=PermissionMode.BYPASS),
         )
@@ -79,7 +79,23 @@ class BrowserAgent:
             state=state,
             system_prompt=SYSTEM_PROMPT,
         )
-        log.info("BrowserAgent 初始化完成，挂载 %d 个工具", len(tool_functions))
+        log.info("BrowserAgent 初始化完成")
+
+    async def list_skills(self) -> list[dict]:
+        """返回当前注册的技能清单 [{name, description}]，供前端展示。
+
+        直接查询已注册的 SkillLoader（公开 API），技能集是全局静态的，与会话无关。
+        """
+        seen: dict[str, dict] = {}
+        for loader in self._skill_loaders:
+            for skill in await loader.list_skills():
+                if skill.name in seen:
+                    continue
+                seen[skill.name] = {
+                    "name": skill.name,
+                    "description": skill.description,
+                }
+        return list(seen.values())
 
     def reset_context(self) -> None:
         """新建会话：重建 Agent 实例以彻底隔离上下文。
@@ -117,7 +133,28 @@ class BrowserAgent:
             log.info("WebSocket 已绑定")
 
     @staticmethod
-    def _drain_reflection(text: str) -> tuple[dict | None, str]:
+    def _parse_reflection(text: str) -> dict | None:
+        """从文本中解析 reflection JSON。
+
+        reflection 结构固定：
+        ``{"evaluation_previous_goal", "memory", "next_goal"}``，
+        找不到或解析失败时返回 None。
+        """
+        match = re.search(r'\{[^{}]*"evaluation_previous_goal"[^{}]*\}', text, re.DOTALL)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group())
+        except json.JSONDecodeError:
+            return None
+        return {
+            "evaluation_previous_goal": data.get("evaluation_previous_goal", ""),
+            "memory": data.get("memory", ""),
+            "next_goal": data.get("next_goal", ""),
+        }
+
+    @classmethod
+    def _drain_reflection(cls, text: str) -> tuple[dict | None, str]:
         """从文本中分离 reflection JSON 与剩余回复文本。
 
         reflection 只显示在工具步骤卡片，不应进入回复气泡；剩余文本作为给用户的回复。
@@ -126,15 +163,9 @@ class BrowserAgent:
         match = re.search(r'\{[^{}]*"evaluation_previous_goal"[^{}]*\}', text, re.DOTALL)
         if not match:
             return None, text
-        try:
-            data = json.loads(match.group())
-        except json.JSONDecodeError:
+        reflection = cls._parse_reflection(match.group())
+        if reflection is None:
             return None, text
-        reflection = {
-            "evaluation_previous_goal": data.get("evaluation_previous_goal", ""),
-            "memory": data.get("memory", ""),
-            "next_goal": data.get("next_goal", ""),
-        }
         remaining = (text[:match.start()] + text[match.end():]).strip()
         return reflection, remaining
 
@@ -153,6 +184,8 @@ class BrowserAgent:
         _tool_calls: dict[str, dict] = {}
         _step_index = 0
         _text_buf = ""
+        _total_input_tokens = 0
+        _total_output_tokens = 0
 
         try:
             # 推送初始 thinking 状态
@@ -164,7 +197,11 @@ class BrowserAgent:
             async for evt in self._agent.reply_stream(
                 [UserMsg(name="user", content=text)]
             ):
-                if evt.type == EventType.TEXT_BLOCK_DELTA:
+                if evt.type == EventType.MODEL_CALL_END:
+                    # 累加本轮对话的 token 消耗，结束时一次性发送
+                    _total_input_tokens += evt.input_tokens
+                    _total_output_tokens += evt.output_tokens
+                elif evt.type == EventType.TEXT_BLOCK_DELTA:
                     # 缓冲文本，不立即推送：需在工具调用/流结束时区分 reflection（进步骤卡片）
                     # 与回复文本（进气泡），避免 reflection JSON 显示在回复气泡
                     _text_buf += evt.delta
@@ -236,7 +273,7 @@ class BrowserAgent:
                             parsed_args = json.loads(tc["args_buf"]) if tc["args_buf"] else {}
                         except (json.JSONDecodeError, TypeError):
                             parsed_args = tc["args_buf"]
-                        status = "done" if str(evt.state) == "success" else "error"
+                        status = "done" if evt.state == ToolResultState.SUCCESS else "error"
                         yield {
                             "type": "event",
                             "event": {
@@ -268,6 +305,18 @@ class BrowserAgent:
             if remaining:
                 yield {"type": "stream", "content": remaining}
 
+            # 发送本轮对话的 token 消耗汇总（在 [DONE] 之前，前端定稿前收到）
+            yield {
+                "type": "event",
+                "event": {
+                    "type": "token_usage",
+                    "data": {
+                        "input": _total_input_tokens,
+                        "output": _total_output_tokens,
+                    },
+                    "timestamp": 0,
+                },
+            }
             yield {"type": "stream", "content": "[DONE]"}
             yield {
                 "type": "event",

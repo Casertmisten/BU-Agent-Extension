@@ -22,6 +22,9 @@ export default defineBackground(() => {
 
   // WS 消息路由
   let isStreamingActive = false
+  // 缓存后端推送的技能清单：skills_list 仅在连接时推送一次，sidepanel 可能晚于
+  // 推送打开，需缓存以便 sidepanel 挂载时通过 get_skills 拉取（仿 get_status 模式）。
+  let cachedSkills: unknown[] = []
 
   wsClient.onMessage((msg) => {
     const type = msg.type as string
@@ -52,6 +55,10 @@ export default defineBackground(() => {
         sendToContentScript({ action: 'disable_overlay' })
       }
       chrome.runtime.sendMessage(msg).catch(() => {})
+    } else if (type === 'skills_list') {
+      // 缓存并转发后端推送的技能清单到 sidepanel
+      cachedSkills = (msg as any).skills ?? []
+      chrome.runtime.sendMessage(msg).catch(() => {})
     }
   })
 
@@ -68,8 +75,9 @@ export default defineBackground(() => {
     try {
       let result
       switch (action) {
-        case 'parse_dom': case 'get_element_info': case 'click': case 'input_text': case 'scroll': case 'scroll_element': case 'extract_content':
-          result = await executeInContentScript(msg); break
+       case 'parse_page': case 'parse_dom': case 'get_element_info': case 'click': case 'input_text': case 'scroll': case 'scroll_element': case 'extract_content':
+        case 'parse_dom_tree':
+         result = await executeInContentScript(msg); break
         case 'screenshot': result = await handleScreenshot(); break
         case 'navigate': result = await handleNavigate(msg.url as string); break
         case 'wait': result = await handleWait((msg.seconds as number) || 2); break
@@ -95,13 +103,14 @@ export default defineBackground(() => {
     })
   }
 
-  async function injectContentScript(tabId: number) {
-    try {
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['content/content.js'] })
-    } catch (err) {
-      console.warn('[BU-Agent] Content script inject:', (err as Error).message)
-    }
-  }
+ async function injectContentScript(tabId: number) {
+   try {
+      // DOM 树引擎 + 脱水层 + 入口，按顺序注入
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content/dom-tree-engine.js', 'content/dom-serialize.js', 'content/content.js'] })
+   } catch (err) {
+     console.warn('[BU-Agent] Content script inject:', (err as Error).message)
+   }
+ }
 
   async function handleScreenshot() {
     const tab = await getActiveTab()
@@ -207,6 +216,10 @@ export default defineBackground(() => {
     }
     if (message.type === 'get_status') {
       sendResponse({ connected: wsClient.isConnected() })
+    }
+    if (message.type === 'get_skills') {
+      // sidepanel 挂载时拉取缓存的技能清单（见 cachedSkills 注释）
+      sendResponse({ skills: cachedSkills })
     }
     if (message.type === 'stop') {
       // 转发停止指令给后端 agent

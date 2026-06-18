@@ -4,6 +4,11 @@
 职责：启动 WS 服务、路由消息到 BrowserAgent。
 Agent 相关逻辑全部在 agent/ 模块中。
 """
+import websockets
+from agent import BrowserAgent
+from browser.protocol import validate_message
+from config_loader import load_config
+from logger import get_logger, setup_logging
 
 import asyncio
 import json
@@ -11,17 +16,9 @@ import time
 from dotenv import load_dotenv
 
 load_dotenv()
-
-import websockets
-
-from agent import BrowserAgent
-from browser.protocol import validate_message
-from config_loader import load_config
-from logger import get_logger, setup_logging
-
 log = get_logger("server")
 
-# 全局唯一的 Agent 实例
+# 全局唯一的 Agent 实例，因为浏览器只有一个实例，Agent 也应该是单例的，避免多个Agent实例冲突
 _agent: BrowserAgent | None = None
 # 当前正在运行的 agent task，用于支持取消
 _current_task: asyncio.Task | None = None
@@ -54,10 +51,19 @@ async def _run_agent_and_send(agent: BrowserAgent, text: str):
 async def handle_client(websocket, config: dict):
     """处理 WebSocket 客户端（Chrome 扩展）连接。
 
-    Chrome 扩展重连时只更新 WebSocket 引用，不重建 Agent。
+    Chrome 扩展重连时只更新 WebSocket 引用，不重建 Agent，避免状态丢失。
     """
     agent = _get_or_create_agent(config)
     agent.attach_ws(websocket)
+
+    # 握手后推送一次技能清单（技能是全局静态能力，与会话无关）。
+    # 失败不阻断连接——前端 skills 保持空，按钮仍可点（显示空列表）。
+    try:
+        skills = await agent.list_skills()
+        await websocket.send(json.dumps({"type": "skills_list", "skills": skills}))
+        log.info("已推送技能清单，共 %d 个技能", len(skills))
+    except Exception as e:
+        log.warning("推送技能列表失败: %s", e)
 
     # 重连时通知前端之前的状态已丢失
     if agent._busy:
@@ -134,7 +140,15 @@ async def main():
     host = config.get("server", {}).get("host", "localhost")
     port = config.get("server", {}).get("port", "8765")
 
+    dom_strategy = config.get("browser", {}).get("dom_strategy", "ax")
+    strategy_desc = {
+        "ax": "无障碍树语义结构",
+        "flat": "扁平元素列表",
+        "tree": "DOM 树剪枝脱水文本",
+    }.get(dom_strategy, dom_strategy)
+
     log.info("启动 Browser Use Agent 服务器 ws://%s:%s", host, port)
+    log.info("网页结构解析策略: %s（%s）", dom_strategy, strategy_desc)
 
     async with websockets.serve(
         lambda ws: handle_client(ws, config),
@@ -147,3 +161,17 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+
+
+## 编写思路
+### 1、需求分析：
+#  (1）这个系统要做什么？——> 用户通过浏览器插件发指令，AI 控制浏览器执行操作
+#  (2）有哪些参与者？——> 用户、Chrome 扩展、Python 服务器、浏览器
+#  (3）核心挑战是什么？——> 网络可能断开、任务可能很长、用户可能中途取消
+
+### 2、识别问题：
+# (1)浏览器只有1个
+# (2)任务耗时不确定，所以程序不能阻塞，必须异步处理
+# (3)用户可能中途中断，需要支持重连恢复
