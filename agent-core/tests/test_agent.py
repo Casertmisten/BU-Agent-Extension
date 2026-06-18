@@ -32,6 +32,17 @@ def _make_config():
     }
 
 
+def _mk_tool_evt(evt_type, tid, **extra):
+    """构造一个工具相关事件的 MagicMock。"""
+    from unittest.mock import MagicMock
+    evt = MagicMock()
+    evt.type = evt_type
+    evt.tool_call_id = tid
+    for k, v in extra.items():
+        setattr(evt, k, v)
+    return evt
+
+
 def test_agent_init():
     """测试 Agent 初始化。"""
     agent = BrowserAgent(_make_config())
@@ -185,14 +196,14 @@ async def test_reflection_event_emitted():
 @pytest.mark.asyncio
 async def test_reflection_filter_streaming():
     """reflection JSON 被切成多个 delta 时仍识别为 reflection 事件；
-    其后的回复文本应作为多个独立 stream 事件逐段 yield（真流式，非整块）。"""
+    其后的回复文本（方案 B）不进气泡，仅在未调用 done 时作为兜底整段发出。"""
     from unittest.mock import MagicMock, patch
 
     agent = BrowserAgent(_make_config())
     agent.init()
 
     mock_events = []
-    # reflection JSON 拆成 3 个 delta（模拟逐 token 流式）
+    # reflection JSON 拆成 2 个 delta（模拟逐 token 流式）
     json_chunks = [
         '{"evaluation_previous_goal": "成功"',
         ', "memory": "记忆", "next_goal": "目标"}',
@@ -202,7 +213,7 @@ async def test_reflection_filter_streaming():
         evt.type = "TEXT_BLOCK_DELTA"
         evt.delta = c
         mock_events.append(evt)
-    # 回复文本拆成 2 个 delta
+    # 回复文本拆成 2 个 delta（这些在方案 B 下是中间正文，不进气泡）
     for c in ["这是给用户", "的回复"]:
         evt = MagicMock()
         evt.type = "TEXT_BLOCK_DELTA"
@@ -219,21 +230,20 @@ async def test_reflection_filter_streaming():
     assert len(reflections) == 1
     assert reflections[0]["event"]["data"]["next_goal"] == "目标"
 
-    # 回复文本：应被分成两段 stream 事件（逐段流式），而非合并成一整块
+    # 方案 B：回复气泡的唯一来源是 done.text；本场景未调用 done，
+    # 故中间正文作为兜底在流末整段发出（而非逐 delta 进气泡）
     streams = [e for e in events if e.get("type") == "stream" and e.get("content") not in ("[DONE]",)]
-    assert len(streams) == 2
-    assert streams[0]["content"] == "这是给用户"
-    assert streams[1]["content"] == "的回复"
+    assert [s["content"] for s in streams] == ["这是给用户的回复"]
 
-    # 顺序：reflection 在所有 stream 之前
+    # reflection 在所有 stream 之前
     refl_idx = events.index(reflections[0])
     for s in streams:
         assert events.index(s) > refl_idx
 
 
 @pytest.mark.asyncio
-async def test_reflection_filter_plain_text_streams_directly():
-    """前置非 JSON 文本（无 reflection）时，每个 delta 应直接流式发出，不缓冲。"""
+async def test_reflection_filter_plain_text_as_fallback():
+    """方案 B：前置非 JSON 文本（无 reflection、未调 done）时，作为兜底整段发出。"""
     from unittest.mock import MagicMock, patch
 
     agent = BrowserAgent(_make_config())
@@ -255,9 +265,53 @@ async def test_reflection_filter_plain_text_streams_directly():
     reflections = [e for e in events if e.get("type") == "event" and e["event"]["type"] == "reflection"]
     assert len(reflections) == 0
 
-    # 三段各自独立流式发出
+    # 方案 B：无 done 时中间正文作为兜底，整段（拼合后 strip）一次发出
     streams = [e for e in events if e.get("type") == "stream" and e.get("content") not in ("[DONE]",)]
-    assert [s["content"] for s in streams] == ["你好", "，", "世界"]
+    assert [s["content"] for s in streams] == ["你好，世界"]
+
+
+@pytest.mark.asyncio
+async def test_done_text_streams_incrmentally():
+    """方案 B：done 工具的 text 参数逐 delta 增量提取并流式发出（打字机效果），
+    且中间正文不进气泡，避免重复。"""
+    from unittest.mock import MagicMock, patch
+
+    agent = BrowserAgent(_make_config())
+    agent.init()
+
+    mock_events = []
+    # 中间正文：应被丢弃（不进气泡），只有 reflection 进卡片
+    evt = MagicMock()
+    evt.type = "TEXT_BLOCK_DELTA"
+    evt.delta = '{"evaluation_previous_goal": "完成查询", "memory": "找到2条", "next_goal": "汇报"}不应进气泡的正文'
+    mock_events.append(evt)
+
+    # done 工具参数逐帧到达（模拟 OpenAI 流式：arguments 分片）
+    done_deltas = [
+        '{"success": tr',
+        'ue, "text": "筛选芦山',
+        '县7级以上地震，找到2条记录"}',
+    ]
+    mock_events.append(_mk_tool_evt("TOOL_CALL_START", "done_1", tool_call_name="done"))
+    for d in done_deltas:
+        mock_events.append(_mk_tool_evt("TOOL_CALL_DELTA", "done_1", delta=d))
+    mock_events.append(_mk_tool_evt("TOOL_RESULT_END", "done_1", state="success"))
+
+    with patch.object(agent._agent, "reply_stream", return_value=AsyncIteratorMock(mock_events)):
+        events = []
+        async for evt in agent.run("测试"):
+            events.append(evt)
+
+    streams = [e["content"] for e in events if e.get("type") == "stream" and e.get("content") != "[DONE]"]
+    # 流式拼接后恰好是 done.text，不多不少（无重复、无中间正文泄漏）
+    assert "".join(streams) == "筛选芦山县7级以上地震，找到2条记录"
+    # 至少分 2 段到达（证明是逐 token 流式而非整块）
+    assert len(streams) >= 2
+
+    # reflection 正常抽出
+    reflections = [e for e in events if e.get("type") == "event" and e["event"]["type"] == "reflection"]
+    assert len(reflections) == 1
+    assert reflections[0]["event"]["data"]["next_goal"] == "汇报"
 
 
 @pytest.mark.asyncio

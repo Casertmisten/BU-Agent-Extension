@@ -125,6 +125,60 @@ class ReflectionFilter:
         return None, ""
 
 
+# ---------------------------------------------------------------------------
+# 方案 B：done.text 是回复气泡的唯一来源（逐 token 流式）
+#
+# done 工具参数形如 {"success": true, "text": "..."}，其 arguments 经
+# TOOL_CALL_DELTA 逐帧增量到达。下方用正则从（可能尚未闭合的）累积缓冲中
+# 提取 text 字段已到达部分，解码 JSON 转义后增量推送到气泡，实现真流式
+# 打字机效果，且只在 done 这一条路径产出回复文本，从结构上杜绝重复。
+# ---------------------------------------------------------------------------
+
+_DONE_TEXT_COMPLETE = re.compile(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"')
+_DONE_TEXT_PARTIAL = re.compile(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)$')
+
+
+def _decode_json_string(raw: str) -> str:
+    """解码 JSON 字符串转义（\\n \\t \\r \\" \\\\ \\/ \\b \\f \\uXXXX）。"""
+    out: list[str] = []
+    i = 0
+    n = len(raw)
+    simple = {'n': '\n', 't': '\t', 'r': '\r', '"': '"', '\\': '\\',
+              '/': '/', 'b': '\b', 'f': '\f'}
+    while i < n:
+        c = raw[i]
+        if c == '\\' and i + 1 < n:
+            e = raw[i + 1]
+            if e == 'u' and i + 6 <= n:
+                try:
+                    out.append(chr(int(raw[i + 2:i + 6], 16)))
+                    i += 6
+                    continue
+                except ValueError:
+                    pass
+            out.append(simple.get(e, e))
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+
+def _extract_done_text(args_buf: str) -> str:
+    """从（可能尚未闭合的）done 参数 JSON 中提取 text 字段已到达的解码文本。
+
+    优先匹配已闭合的完整字符串；否则匹配尚未闭合的部分（流式中段，悬挂的
+    转义符不会被捕获，留待下一帧补全）。未出现 text 字段时返回空串。
+    """
+    m = _DONE_TEXT_COMPLETE.search(args_buf)
+    if m:
+        return _decode_json_string(m.group(1))
+    m = _DONE_TEXT_PARTIAL.search(args_buf)
+    if m:
+        return _decode_json_string(m.group(1))
+    return ""
+
+
 class BrowserAgent:
     """浏览器自动化 Agent。
 
@@ -286,8 +340,15 @@ class BrowserAgent:
         log.info("Agent 收到指令: %.100s", text)
         _tool_calls: dict[str, dict] = {}
         _step_index = 0
-        # 增量分离 reflection 与回复文本：reflection 进步骤卡片，回复文本逐 token 进气泡
+        # 增量分离 reflection JSON 与正文：reflection 进步骤卡片；正文不再进气泡，
+        # 仅暂存为兜底——done.text 才是回复气泡的唯一来源（方案 B，逐 token 流式）
         _filter = ReflectionFilter(self._drain_reflection)
+        _trailing_text: list[str] = []   # 中间步骤正文兜底：仅 done 未产出文本时回退使用
+        # done 流式：已推送到气泡的 text 字符数（避免重复发送）
+        _done_emitted = 0
+        _done_args = ""                  # done 工具参数累积缓冲
+        _done_active = False
+        _done_emitted_any = False        # done 是否至少产出过一次文本（判定是否需兜底）
         _total_input_tokens = 0
         _total_output_tokens = 0
 
@@ -306,7 +367,8 @@ class BrowserAgent:
                     _total_input_tokens += evt.input_tokens
                     _total_output_tokens += evt.output_tokens
                 elif evt.type == EventType.TEXT_BLOCK_DELTA:
-                    # 逐 delta 分类：reflection（进步骤卡片）即时识别，回复文本（进气泡）零缓冲流式
+                    # reflection 进步骤卡片；其余正文暂存为兜底，不进气泡
+                    # （方案 B：回复气泡的唯一来源是 done.text，杜绝正文与 done 双发重复）
                     reflection, stream_text = _filter.feed(evt.delta)
                     if reflection:
                         yield {
@@ -314,7 +376,7 @@ class BrowserAgent:
                             "event": {"type": "reflection", "data": reflection, "timestamp": 0},
                         }
                     if stream_text:
-                        yield {"type": "stream", "content": stream_text}
+                        _trailing_text.append(stream_text)
 
                 elif evt.type == EventType.TOOL_CALL_START:
                     # 工具调用前收尾：解析残余缓冲（未闭合的 JSON / 残留文本），重置过滤器
@@ -325,7 +387,7 @@ class BrowserAgent:
                             "event": {"type": "reflection", "data": reflection, "timestamp": 0},
                         }
                     if remaining:
-                        yield {"type": "stream", "content": remaining}
+                        _trailing_text.append(remaining)
 
                     # 推送 executing 状态
                     yield {
@@ -340,8 +402,12 @@ class BrowserAgent:
                         "result_buf": "",
                         "step": _step_index,
                     }
-                    # done 是元工具(标记完成并转发汇报)，其 text 应进回复气泡，不显示工具步骤卡片
-                    if evt.tool_call_name != "done":
+                    if evt.tool_call_name == "done":
+                        # done 激活：其 text 参数将逐 token 流式进气泡（方案 B 唯一回复来源）
+                        _done_active = True
+                        _done_args = ""
+                        _done_emitted = 0
+                    elif evt.tool_call_name != "done":
                         _step_index += 1
                         yield {
                             "type": "event",
@@ -360,6 +426,15 @@ class BrowserAgent:
                     tc = _tool_calls.get(evt.tool_call_id)
                     if tc:
                         tc["args_buf"] += evt.delta
+                        # done 激活：从累积参数中增量提取 text 字段，只发新增部分（真流式打字机）
+                        if _done_active and tc["name"] == "done":
+                            _done_args = tc["args_buf"]
+                            full = _extract_done_text(_done_args)
+                            if len(full) > _done_emitted:
+                                yield {"type": "stream", "content": full[_done_emitted:]}
+                                _done_emitted = len(full)
+                                if full:
+                                    _done_emitted_any = True
 
                 elif evt.type == EventType.TOOL_RESULT_TEXT_DELTA:
                     tc = _tool_calls.get(evt.tool_call_id)
@@ -370,13 +445,19 @@ class BrowserAgent:
                     tc = _tool_calls.get(evt.tool_call_id)
                     is_done = tc is not None and tc["name"] == "done"
                     if is_done:
-                        # done 的 text 是给用户的最终汇报，推送到回复气泡，不进工具步骤卡片
-                        try:
-                            parsed_args = json.loads(tc["args_buf"]) if tc["args_buf"] else {}
-                        except (json.JSONDecodeError, TypeError):
-                            parsed_args = {}
-                        if isinstance(parsed_args, dict) and parsed_args.get("text"):
-                            yield {"type": "stream", "content": parsed_args["text"]}
+                        # done 的 text 已在 TOOL_CALL_DELTA 阶段逐 token 流式发完，这里不再二次发送
+                        _done_active = False
+                        # 兜底：delta 阶段未产出任何文本（模型未填 text 或字段顺序异常），
+                        # 用完整 args 重新解析补发一次，保证最终回复不丢
+                        if not _done_emitted_any:
+                            try:
+                                parsed_args = json.loads(tc["args_buf"]) if tc["args_buf"] else {}
+                            except (json.JSONDecodeError, TypeError):
+                                parsed_args = {}
+                            text_val = parsed_args.get("text") if isinstance(parsed_args, dict) else None
+                            if text_val:
+                                yield {"type": "stream", "content": text_val}
+                                _done_emitted_any = True
                     elif tc:
                         try:
                             parsed_args = json.loads(tc["args_buf"]) if tc["args_buf"] else {}
@@ -412,7 +493,14 @@ class BrowserAgent:
                     "event": {"type": "reflection", "data": reflection, "timestamp": 0},
                 }
             if remaining:
-                yield {"type": "stream", "content": remaining}
+                _trailing_text.append(remaining)
+
+            # 兜底：done 全程未产出文本（模型未调用 done，或 done 无 text），
+            # 把暂存的中间正文作为回复发出，避免气泡为空
+            if not _done_emitted_any and _trailing_text:
+                fallback = "".join(_trailing_text).strip()
+                if fallback:
+                    yield {"type": "stream", "content": fallback}
 
             # 发送本轮对话的 token 消耗汇总（在 [DONE] 之前，前端定稿前收到）
             yield {
@@ -434,6 +522,14 @@ class BrowserAgent:
             log.info("Agent 执行完成")
         except Exception as e:
             log.error("Agent 执行错误: %s", e, exc_info=True)
+            # 兜底：done 尚未产出任何文本时，把暂存的中间正文作为回复发出，避免气泡为空
+            if not _done_emitted_any and _trailing_text:
+                fallback = "".join(_trailing_text).strip()
+                if fallback:
+                    try:
+                        yield {"type": "stream", "content": fallback}
+                    except Exception:
+                        pass
             yield {
                 "type": "event",
                 "event": {"type": "activity_status", "data": {"status": "error"}},
