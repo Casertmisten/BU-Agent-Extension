@@ -84,9 +84,10 @@ class ParsePage(_BrowserToolBase):
     """解析页面结构。
 
     按 dom_strategy 决定后端：
-    - "ax"（默认）：发 parse_page，返回无障碍树语义结构。
-    - "flat"：发 parse_dom，返回旧版扁平元素列表。
-    对外 name 始终为 parse_page，切换对 LLM 透明。
+   - "ax"（默认）：发 parse_page，返回无障碍树语义结构。
+   - "flat"：发 parse_dom，返回旧版扁平元素列表。
+    - "tree"：发 parse_dom_tree，返回 LLM 友好的脱水文本 + 页面信息。
+   对外 name 始终为 parse_page，切换对 LLM 透明。
     """
 
     name = "parse_page"
@@ -105,12 +106,26 @@ class ParsePage(_BrowserToolBase):
 
     def __init__(self, conn: BrowserConnection, dom_strategy: str = "ax") -> None:
         super().__init__(conn)
-        self._strategy = "ax" if dom_strategy == "ax" else "flat"
+        if dom_strategy == "tree":
+            self._strategy = "tree"
+        elif dom_strategy == "flat":
+            self._strategy = "flat"
+        else:
+            self._strategy = "ax"
 
     async def __call__(self) -> ToolChunk:
-        action = "parse_page" if self._strategy == "ax" else "parse_dom"
+        if self._strategy == "tree":
+            action = "parse_dom_tree"
+        elif self._strategy == "flat":
+            action = "parse_dom"
+        else:
+            action = "parse_page"
+
         result = await self._conn.send_action({"action": action})
         data = result.get("data", {})
+        if self._strategy == "tree":
+            # tree 返回 {text: "...", page_info: {...}}
+            return self._text(data.get("text", ""))
         # ax 返回 {tree:{...}}，flat 返回 {elements:[...]}
         payload = data.get("tree", data.get("elements", []))
         return self._json(payload)
@@ -428,13 +443,11 @@ class ScreenshotAnalyze(_BrowserToolBase):
             content=[
                 DataBlock(
                     source=Base64Source(
-                        type="base64",
                         data=image_base64,
                         media_type="image/jpeg",
                     )
                 ),
                 TextBlock(
-                    type="text",
                     text="描述当前页面的状态、布局和所有可交互元素。包括按钮、输入框、链接等，标注它们的大致位置。",
                 ),
             ],
@@ -563,7 +576,7 @@ def create_browser_tools(
         conn: 浏览器连接实例。
         vlm_model: VLM 模型实例（供截图分析工具使用）。
         viewport_info: 视口信息字典（供 CDP 坐标换算使用）。
-        dom_strategy: DOM 解析策略，"ax" 或 "flat"，决定 ParsePage 后端。
+        dom_strategy: DOM 解析策略，"ax" / "flat" / "tree"，决定 ParsePage 后端。
 
     Returns:
         组装好的 ToolBase 实例列表，可直接喂给 agentscope Toolkit。

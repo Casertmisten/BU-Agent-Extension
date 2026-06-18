@@ -140,7 +140,15 @@ async def main():
     host = config.get("server", {}).get("host", "localhost")
     port = config.get("server", {}).get("port", "8765")
 
+    dom_strategy = config.get("browser", {}).get("dom_strategy", "ax")
+    strategy_desc = {
+        "ax": "无障碍树语义结构",
+        "flat": "扁平元素列表",
+        "tree": "DOM 树剪枝脱水文本",
+    }.get(dom_strategy, dom_strategy)
+
     log.info("启动 Browser Use Agent 服务器 ws://%s:%s", host, port)
+    log.info("网页结构解析策略: %s（%s）", dom_strategy, strategy_desc)
 
     async with websockets.serve(
         lambda ws: handle_client(ws, config),

@@ -23,4 +23,4 @@ skills:
     - "./skills"
 
 browser:
-  dom_strategy: ${DOM_STRATEGY:-ax}   # "ax"=新版 AX 树解析, "flat"=旧版扁平列表
+  dom_strategy: ${DOM_STRATEGY:-ax}   # "ax"=AX 树, "flat"=扁平列表, "tree"=DOM 树剪枝脱水文本

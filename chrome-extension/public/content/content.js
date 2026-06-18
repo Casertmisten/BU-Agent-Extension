@@ -186,11 +186,42 @@
 
   function clearTags() {
     document.querySelectorAll('[backend-id]').forEach((el) => {
-      el.removeAttribute('backend-id');
-    });
+     el.removeAttribute('backend-id');
+   });
+ }
+
+  // === DOM 树剪枝解析（基于 dom-tree-engine + dom-serialize）===
+
+  function parseDomTree() {
+    clearTags();
+
+    var S = window.__DOM_SERIALIZE__;
+    if (!S) return { success: false, error: 'dom-serialize.js not loaded' };
+
+    var flatTree = S.getFlatTree({});
+    var content = S.flatTreeToString(flatTree, [], false);
+    var pi = S.getPageInfo();
+
+    // 给每个可交互元素设置 backend-id，兼容现有 click/input 流程
+    var selectorMap = S.getSelectorMap(flatTree);
+    for (var index in selectorMap) {
+      var node = selectorMap[index];
+      if (node.ref) {
+        var id = 'agent-' + String(parseInt(index, 10)).padStart(2, '0');
+        node.ref.setAttribute('backend-id', id);
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        text: content,
+        page_info: pi,
+      },
+    };
   }
 
-  function get_element_info(targetId) {
+ function get_element_info(targetId) {
     const el = document.querySelector(`[backend-id="${targetId}"]`);
     if (!el) return null;
 
@@ -300,17 +331,18 @@
   }
 
   // --- 暴露给测试和外部使用 ---
-  window.__BU_AGENT__ = {
-    tagElements,
-    parsePage,
-    clearTags,
-    get_element_info,
-    clickElement,
-    inputText,
-    scrollPage,
-    enableOverlay,
-    disableOverlay,
-  };
+ window.__BU_AGENT__ = {
+   tagElements,
+   parsePage,
+    parseDomTree,
+   clearTags,
+   get_element_info,
+   clickElement,
+   inputText,
+   scrollPage,
+   enableOverlay,
+   disableOverlay,
+ };
 
   // --- 消息监听 ---
   if (typeof chrome !== 'undefined' && chrome.runtime && !globalThis.__TEST__) {
@@ -321,12 +353,15 @@
       try {
         let result;
         switch (action) {
-          case 'parse_page':
-            result = { success: true, data: { tree: parsePage() } };
+         case 'parse_page':
+           result = { success: true, data: { tree: parsePage() } };
+           break;
+          case 'parse_dom_tree':
+            result = parseDomTree();
             break;
-          case 'parse_dom':
-            result = { success: true, data: { elements: tagElements() } };
-            break;
+         case 'parse_dom':
+           result = { success: true, data: { elements: tagElements() } };
+           break;
           case 'get_element_info':
             result = { success: true, data: get_element_info(message.target_id) };
             break;
