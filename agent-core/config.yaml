@@ -22,3 +22,11 @@ skills:
 
 browser:
   dom_strategy: ${DOM_STRATEGY:-ax}   # "ax"=新版 AX 树解析, "flat"=旧版扁平列表
+
+recorder:
+  # 蒸馏用的模型配置（不配则复用 llm 段）
+  distill_model: null   # null 表示复用 llm.model
+  # 单批上传事件数上限（前端聚合后批量发送）
+  batch_size: 500
+  # 内存缓冲落盘阈值（前端防内存膨胀）
+  buffer_flush_threshold: 5000
