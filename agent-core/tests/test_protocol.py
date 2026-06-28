@@ -42,7 +42,13 @@ def test_reject_missing_type():
 
 
 def test_msg_types_complete():
-    expected = {"action", "result", "heartbeat", "page_ready", "stream", "mode_change", "user_message", "stop", "new_session", "browser_state", "tab_change"}
+    expected = {
+        "action", "result", "heartbeat", "page_ready", "stream", "mode_change",
+        "user_message", "stop", "new_session", "browser_state", "tab_change",
+        # 录制功能
+        "record_start", "record_event", "record_stop", "record_redistill",
+        "get_status", "get_skills",
+    }
     assert expected == MSG_TYPES
 
 
