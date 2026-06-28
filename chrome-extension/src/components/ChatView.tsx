@@ -27,7 +27,6 @@ export function ChatView({ messages, isStreaming, sendTask, stopStream, activity
   const [showSkills, setShowSkills] = useState(false)
   // 录制状态
   const recorder = useRecorder()
-  const [showStopConfirm, setShowStopConfirm] = useState(false)
   const [recordLabel, setRecordLabel] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -199,11 +198,11 @@ export function ChatView({ messages, isStreaming, sendTask, stopStream, activity
               variant="outline"
               size="sm"
               className="h-7 text-xs border-red-500 text-red-500"
-              onClick={() => setShowStopConfirm(true)}
+              onClick={() => recorder.stop()}
               title="停止录制"
             >
               <Circle className="size-3.5 fill-red-500 text-red-500 animate-pulse" />
-              录制中
+              录制中（点击停止）
             </Button>
           )}
 
@@ -234,32 +233,28 @@ export function ChatView({ messages, isStreaming, sendTask, stopStream, activity
           )}
         </div>
 
-        {/* 停止确认弹窗 */}
-        {showStopConfirm && (
-          <div className="absolute bottom-full mb-2 right-0 w-72 rounded-md border bg-popover p-3 shadow-md z-10">
-            <div className="text-xs font-medium mb-2">停止录制</div>
+        {/* 录制摘要确认面板（停止采集后展示，用户选择保存或丢弃） */}
+        {recorder.state.status === 'stopped' && (
+          <div className="mt-2 rounded-md border bg-popover p-3 shadow-sm">
+            <div className="text-xs font-medium mb-2">录制完成，是否保存为技能？</div>
+            <div className="text-[11px] text-muted-foreground mb-2 space-y-0.5">
+              <div>操作步骤：{recorder.state.eventCount} 个事件</div>
+              <div>涉及域名：{recorder.state.domains.join('、') || '无'}</div>
+              <div>时长：{Math.round(recorder.state.durationMs / 1000)} 秒</div>
+            </div>
             <input
               type="text"
               className="w-full rounded border bg-background px-2 py-1 text-xs mb-2"
-              placeholder="技能名称（可选）"
+              placeholder="技能名称（可选，用于蒸馏命名）"
               value={recordLabel}
               onChange={(e) => setRecordLabel(e.target.value)}
             />
             <div className="flex gap-2 justify-end">
-              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setShowStopConfirm(false)}>
-                取消
-              </Button>
-              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => {
-                setShowStopConfirm(false)
-                chrome.runtime.sendMessage({ type: 'record_stop' })
-              }}>
+              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => recorder.discard()}>
                 丢弃
               </Button>
-              <Button size="sm" className="h-7 text-xs" onClick={() => {
-                setShowStopConfirm(false)
-                recorder.stop(recordLabel)
-              }}>
-                确认
+              <Button size="sm" className="h-7 text-xs" onClick={() => recorder.confirmSave(recordLabel)}>
+                保存并蒸馏
               </Button>
             </div>
           </div>

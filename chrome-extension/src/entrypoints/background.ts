@@ -152,7 +152,8 @@ export default defineBackground(() => {
     return trace_id
   }
 
-  /** 停止录制：flush 剩余 + 发 record_stop + 卸载 content */
+  /** 停止采集：通知 content 停止 + flush 剩余 + 发 record_stop（后端回 record_stopped 摘要）。
+   *  不触发蒸馏，保留 session 供用户确认。 */
   async function stopRecording(finalLabel?: string): Promise<void> {
     if (!activeRecordSession) return
     const session = activeRecordSession
@@ -176,6 +177,17 @@ export default defineBackground(() => {
     })
 
     chrome.action.setBadgeText({ text: '' })
+  }
+
+  /** 确认保存：发 record_distill 触发蒸馏，清理本地 session */
+  function confirmDistill(traceId: string, label: string): void {
+    wsClient.send({ type: 'record_distill', trace_id: traceId, label })
+    activeRecordSession = null
+  }
+
+  /** 丢弃：发 record_discard，清理本地 session */
+  function discardRecording(traceId: string): void {
+    wsClient.send({ type: 'record_discard', trace_id: traceId })
     activeRecordSession = null
   }
 
@@ -363,6 +375,14 @@ export default defineBackground(() => {
     if (message.type === 'record_stop') {
       stopRecording(message.label).then(() => sendResponse({ stopped: true }))
       return true
+    }
+    if (message.type === 'record_distill') {
+      confirmDistill(message.trace_id, message.label || '')
+      sendResponse({ received: true })
+    }
+    if (message.type === 'record_discard') {
+      discardRecording(message.trace_id)
+      sendResponse({ received: true })
     }
     if (message.type === 'record_redistill') {
       wsClient.send({ type: 'record_redistill', trace_id: message.trace_id })

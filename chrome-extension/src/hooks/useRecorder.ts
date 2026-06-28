@@ -5,6 +5,7 @@ import type {
   RecorderStatus,
   DistillStage,
   RecordStartedMsg,
+  RecordStoppedMsg,
   RecordDistillProgressMsg,
   RecordDoneMsg,
   RecordErrorMsg,
@@ -15,6 +16,8 @@ export interface RecorderState {
   traceId: string | null
   startedAt: number | null
   eventCount: number
+  domains: string[]
+  durationMs: number
   distillStage: DistillStage | null
   distillMessage: string | null
   lastSkill: { name: string; path: string } | null
@@ -26,6 +29,8 @@ const INITIAL: RecorderState = {
   traceId: null,
   startedAt: null,
   eventCount: 0,
+  domains: [],
+  durationMs: 0,
   distillStage: null,
   distillMessage: null,
   lastSkill: null,
@@ -49,6 +54,17 @@ export function useRecorder() {
           traceId: m.trace_id,
           startedAt: Date.now(),
         })
+      } else if (type === 'record_stopped') {
+        // 停止采集，进入确认面板（等用户保存/丢弃）
+        const m = msg as unknown as RecordStoppedMsg
+        setState((s) => ({
+          ...s,
+          status: 'stopped',
+          traceId: m.trace_id,
+          eventCount: m.event_count,
+          domains: m.domains,
+          durationMs: m.duration_ms,
+        }))
       } else if (type === 'record_progress') {
         setState((s) => ({ ...s, eventCount: (msg.received_events as number) ?? s.eventCount }))
       } else if (type === 'record_distilling') {
@@ -92,9 +108,21 @@ export function useRecorder() {
     setState((s) => ({ ...s, status: 'distilling', error: null }))
   }, [])
 
+  const confirmSave = useCallback(async (label: string) => {
+    setState((s) => ({ ...s, status: 'distilling', distillStage: null, distillMessage: null }))
+    chrome.runtime.sendMessage({ type: 'record_distill', trace_id: state.traceId, label })
+  }, [state.traceId])
+
+  const discard = useCallback(async () => {
+    if (state.traceId) {
+      chrome.runtime.sendMessage({ type: 'record_discard', trace_id: state.traceId })
+    }
+    setState(INITIAL)
+  }, [state.traceId])
+
   const dismissError = useCallback(() => {
     setState((s) => ({ ...s, error: null }))
   }, [])
 
-  return { state, start, stop, redistill, dismissError }
+  return { state, start, stop, confirmSave, discard, redistill, dismissError }
 }

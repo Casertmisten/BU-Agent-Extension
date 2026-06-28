@@ -83,7 +83,7 @@ export type View =
 // ====== 录制功能（record_*）======
 
 /** 录制状态 */
-export type RecorderStatus = 'idle' | 'recording' | 'distilling' | 'done'
+export type RecorderStatus = 'idle' | 'recording' | 'stopped' | 'distilling' | 'done'
 
 /** 录制蒸馏阶段 */
 export type DistillStage = 'atomize' | 'distill' | 'install'
@@ -108,6 +108,13 @@ export interface RecordRedistillMsg {
 export interface RecordStartedMsg {
   type: 'record_started'
   trace_id: string
+}
+export interface RecordStoppedMsg {
+  type: 'record_stopped'
+  trace_id: string
+  event_count: number
+  domains: string[]
+  duration_ms: number
 }
 export interface RecordProgressMsg {
   type: 'record_progress'
