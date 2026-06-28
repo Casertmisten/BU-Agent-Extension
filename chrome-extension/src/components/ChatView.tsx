@@ -1,4 +1,4 @@
-import { Send, Square, Sparkles } from 'lucide-react'
+import { Send, Square, Sparkles, Circle, Loader2, Check } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Message, SkillInfo } from '@/types'
 import { ThinkingIndicator } from '@/components/EventCards'
@@ -11,6 +11,7 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from '@/components/ui/input-group'
+import { useRecorder } from '@/hooks/useRecorder'
 
 interface ChatViewProps {
   messages: Message[]
@@ -24,6 +25,10 @@ interface ChatViewProps {
 export function ChatView({ messages, isStreaming, sendTask, stopStream, activityStatus, skills }: ChatViewProps) {
   const [inputValue, setInputValue] = useState('')
   const [showSkills, setShowSkills] = useState(false)
+  // 录制状态
+  const recorder = useRecorder()
+  const [showStopConfirm, setShowStopConfirm] = useState(false)
+  const [recordLabel, setRecordLabel] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const skillPopoverRef = useRef<HTMLDivElement>(null)
@@ -169,6 +174,96 @@ export function ChatView({ messages, isStreaming, sendTask, stopStream, activity
             </div>
           )}
         </div>
+
+        {/* 录制按钮 */}
+        <div className="relative mt-2 flex items-center gap-2">
+          {recorder.state.status === 'idle' && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                setRecordLabel('')
+                recorder.start('')
+              }}
+              disabled={isStreaming}
+              title="开始录制"
+            >
+              <Circle className="size-3.5 text-muted-foreground" />
+              录制
+            </Button>
+          )}
+
+          {recorder.state.status === 'recording' && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs border-red-500 text-red-500"
+              onClick={() => setShowStopConfirm(true)}
+              title="停止录制"
+            >
+              <Circle className="size-3.5 fill-red-500 text-red-500 animate-pulse" />
+              录制中
+            </Button>
+          )}
+
+          {recorder.state.status === 'distilling' && (
+            <Button variant="outline" size="sm" className="h-7 text-xs" disabled>
+              <Loader2 className="size-3.5 animate-spin" />
+              {recorder.state.distillMessage || '蒸馏中...'}
+            </Button>
+          )}
+
+          {recorder.state.status === 'done' && recorder.state.lastSkill && (
+            <div className="flex items-center gap-1 text-xs text-green-600">
+              <Check className="size-3.5" />
+              技能 {recorder.state.lastSkill.name} 已生成
+            </div>
+          )}
+
+          {recorder.state.error && (
+            <div className="flex items-center gap-1 text-xs text-red-500">
+              录制失败：{recorder.state.error}
+              <button className="underline" onClick={recorder.dismissError}>忽略</button>
+              {recorder.state.traceId && (
+                <button className="underline" onClick={() => recorder.redistill(recorder.state.traceId!)}>
+                  重试
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 停止确认弹窗 */}
+        {showStopConfirm && (
+          <div className="absolute bottom-full mb-2 right-0 w-72 rounded-md border bg-popover p-3 shadow-md z-10">
+            <div className="text-xs font-medium mb-2">停止录制</div>
+            <input
+              type="text"
+              className="w-full rounded border bg-background px-2 py-1 text-xs mb-2"
+              placeholder="技能名称（可选）"
+              value={recordLabel}
+              onChange={(e) => setRecordLabel(e.target.value)}
+            />
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setShowStopConfirm(false)}>
+                取消
+              </Button>
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => {
+                setShowStopConfirm(false)
+                chrome.runtime.sendMessage({ type: 'record_stop' })
+              }}>
+                丢弃
+              </Button>
+              <Button size="sm" className="h-7 text-xs" onClick={() => {
+                setShowStopConfirm(false)
+                recorder.stop(recordLabel)
+              }}>
+                确认
+              </Button>
+            </div>
+          </div>
+        )}
       </footer>
     </div>
   )
