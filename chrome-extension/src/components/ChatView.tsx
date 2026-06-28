@@ -22,6 +22,49 @@ interface ChatViewProps {
   skills: SkillInfo[]
 }
 
+// 技能列表项：hover 时显示完整简介弹窗（与技能栏重叠，下方空间不足时向上展开）
+function SkillItem({ skill, onPick }: { skill: SkillInfo; onPick: (name: string) => void }) {
+  const [hovered, setHovered] = useState(false)
+  const [above, setAbove] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!hovered || !btnRef.current) return
+    const POPUP_HEIGHT = 240
+    const btnBottom = btnRef.current.getBoundingClientRect().bottom
+    // 基准：技能按钮下界 到 版本信息（footer）下界之间的距离
+    const footer = document.querySelector('footer')
+    const footerBottom = footer ? footer.getBoundingClientRect().bottom : window.innerHeight
+    setAbove(footerBottom - btnBottom < POPUP_HEIGHT)
+  }, [hovered])
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        ref={btnRef}
+        type="button"
+        className="block w-full text-left px-3 py-2 rounded-sm hover:bg-accent"
+        onClick={() => onPick(skill.name)}
+      >
+        <div className="text-xs font-medium">/skill {skill.name}</div>
+        <div className="text-[11px] text-muted-foreground line-clamp-1">{skill.description}</div>
+      </button>
+      {hovered && (
+        <div
+          className={`absolute left-[86px] w-64 max-h-60 overflow-auto rounded-md border bg-popover p-3 text-xs shadow-lg z-30 ${above ? 'bottom-full mb-1' : 'top-full mt-1'}`}
+        >
+          <div className="font-medium mb-1">{skill.name}</div>
+          <div className="whitespace-pre-wrap text-muted-foreground">{skill.description}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ChatView({ messages, isStreaming, sendTask, stopStream, activityStatus, skills }: ChatViewProps) {
   const [inputValue, setInputValue] = useState('')
   const [showSkills, setShowSkills] = useState(false)
@@ -44,7 +87,6 @@ export function ChatView({ messages, isStreaming, sendTask, stopStream, activity
     return () => document.removeEventListener('mousedown', handler)
   }, [showSkills])
 
-  // 选中技能：把 /skill <name> 填入输入框（保留用户已输入内容），聚焦并把光标置于末尾
   const insertSkill = useCallback((skillName: string) => {
     const prefix = `/skill ${skillName} `
     setInputValue((prev) => {
@@ -160,15 +202,7 @@ export function ChatView({ messages, isStreaming, sendTask, stopStream, activity
                   <div className="px-3 py-2 text-xs text-muted-foreground">暂无可用技能</div>
                 ) : (
                   skills.map((s) => (
-                    <button
-                      key={s.name}
-                      type="button"
-                      className="block w-full text-left px-3 py-2 rounded-sm hover:bg-accent"
-                      onClick={() => insertSkill(s.name)}
-                    >
-                      <div className="text-xs font-medium">/skill {s.name}</div>
-                      <div className="text-[11px] text-muted-foreground line-clamp-1">{s.description}</div>
-                    </button>
+                    <SkillItem key={s.name} skill={s} onPick={insertSkill} />
                   ))
                 )}
               </div>
