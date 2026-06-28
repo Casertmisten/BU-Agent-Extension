@@ -146,7 +146,7 @@ export default defineBackground(() => {
     })
 
     console.log('[BU-Agent] sending record_start to backend, trace_id=%s', trace_id)
-    wsClient.send({ type: 'record_start', tab_id: tabId, label })
+    wsClient.send({ type: 'record_start', tab_id: tabId, label, trace_id })
     chrome.action.setBadgeText({ text: '●' })
     chrome.action.setBadgeBackgroundColor({ color: '#ef4444' })
     return trace_id

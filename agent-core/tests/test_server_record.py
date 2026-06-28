@@ -60,6 +60,32 @@ async def test_record_start_creates_session(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_record_start_uses_client_trace_id(monkeypatch):
+    """前端携带 trace_id 时，后端必须复用该 trace_id（不能自己生成新的）。
+
+    回归测试：background 生成的 trace_id 与 content 上传事件用的 trace_id 必须一致，
+    否则 record_event 找不到 session。
+    """
+    agent = _mock_agent()
+    server._agent = agent
+    server._current_task = None
+    monkeypatch.setattr(server, "_record_sessions", {})
+
+    try:
+        ws = FakeWS([json.dumps({
+            "type": "record_start", "tab_id": 1, "label": "测试", "trace_id": "fixedtid1234",
+        })])
+        await server.handle_client(ws, {"skills": {"dirs": ["./skills"]}})
+
+        assert "fixedtid1234" in server._record_sessions
+        started = [json.loads(s) for s in ws.sent if json.loads(s).get("type") == "record_started"]
+        assert started[0]["trace_id"] == "fixedtid1234"
+    finally:
+        server._agent = None
+        server._current_task = None
+
+
+@pytest.mark.asyncio
 async def test_record_event_appends_to_session(monkeypatch):
     """record_event 应把事件追加到对应 session。"""
     agent = _mock_agent()
