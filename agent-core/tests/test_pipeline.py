@@ -22,7 +22,7 @@ async def test_pipeline_progress_callbacks(tmp_path: Path):
          "timestamp": 200, "target": {"tag": "button", "text": "提交", "xpath": "/submit"}},
     ]
 
-    def _fake_model(_msgs):
+    async def _fake_call(self, _msgs):
         async def _gen():
             yield ChatResponse(
                 content=[TextBlock(
@@ -33,7 +33,10 @@ async def test_pipeline_progress_callbacks(tmp_path: Path):
             )
         return _gen()
 
-    mock_model = MagicMock(side_effect=_fake_model)
+    class FakeModel:
+        __call__ = _fake_call
+
+    mock_model = FakeModel()
     stages: list[str] = []
 
     async def on_progress(stage, message):
