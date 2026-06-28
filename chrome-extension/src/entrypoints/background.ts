@@ -61,6 +61,7 @@ export default defineBackground(() => {
       chrome.runtime.sendMessage(msg).catch(() => {})
     } else if (type.startsWith('record_')) {
       // 转发所有 record_* 消息到 SidePanel
+      console.log('[BU-Agent] forwarding %s to sidepanel', type)
       chrome.runtime.sendMessage(msg).catch(() => {})
     }
   })
@@ -85,15 +86,18 @@ export default defineBackground(() => {
   const RECORD_BATCH_SIZE = 500
   const RECORD_FLUSH_INTERVAL_MS = 2000  // 定时 flush，避免低频录制时事件积压
 
-  /** 注入录制 content script 到目标 tab */
-  async function injectRecorder(tabId: number) {
+  /** 确保录制 content script 已注入目标 tab。
+   *  WXT 静态注册的 content script 在新页面加载时自动注入；
+   *  但扩展更新前已打开的页面没有，这里用 executeScript 兜底（重复注入会报错被 catch）。 */
+  async function ensureRecorderInjected(tabId: number) {
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        files: ['recorder.content.js'],
+        files: ['content-scripts/recorder.js'],
       })
     } catch (err) {
-      console.warn('[BU-Agent] Recorder inject:', (err as Error).message)
+      // 页面已自动注入过、或 chrome:// 等不可注入页面——忽略
+      console.debug('[BU-Agent] Recorder inject skipped:', (err as Error).message)
     }
   }
 
@@ -119,6 +123,7 @@ export default defineBackground(() => {
       console.warn('[BU-Agent] 已有录制进行中')
       return null
     }
+    console.log('[BU-Agent] startRecording: tabId=%d label=%s', tabId, label)
     const trace_id = crypto.randomUUID().replace(/-/g, '').slice(0, 12)
     activeRecordSession = {
       trace_id,
@@ -129,15 +134,18 @@ export default defineBackground(() => {
       flushTimer: setInterval(flushRecordBuffer, RECORD_FLUSH_INTERVAL_MS),
     }
 
-    await injectRecorder(tabId)
+    await ensureRecorderInjected(tabId)
 
-    // 注入后给 content 发 start 指令
+    // 给 content 发 start 指令（content 已由 manifest 自动注入或上面兜底注入）
     chrome.tabs.sendMessage(tabId, {
       type: 'record_start_content',
       trace_id,
       tab_id: tabId,
-    }).catch(() => {})
+    }).catch((err) => {
+      console.warn('[BU-Agent] record_start_content 未送达:', (err as Error).message)
+    })
 
+    console.log('[BU-Agent] sending record_start to backend, trace_id=%s', trace_id)
     wsClient.send({ type: 'record_start', tab_id: tabId, label })
     chrome.action.setBadgeText({ text: '●' })
     chrome.action.setBadgeBackgroundColor({ color: '#ef4444' })

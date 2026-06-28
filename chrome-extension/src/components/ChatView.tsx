@@ -141,42 +141,42 @@ export function ChatView({ messages, isStreaming, sendTask, stopStream, activity
           </InputGroupAddon>
         </InputGroup>
 
-        {/* 技能工具栏 */}
-        <div ref={skillPopoverRef} className="relative mt-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => setShowSkills((v) => !v)}
-            disabled={isStreaming}
-            title="选择技能"
-          >
-            <Sparkles className="size-3.5" />
-            技能
-          </Button>
-          {showSkills && (
-            <div className="absolute bottom-full mb-2 left-0 w-72 rounded-md border bg-popover p-1 shadow-md z-10">
-              {skills.length === 0 ? (
-                <div className="px-3 py-2 text-xs text-muted-foreground">暂无可用技能</div>
-              ) : (
-                skills.map((s) => (
-                  <button
-                    key={s.name}
-                    type="button"
-                    className="block w-full text-left px-3 py-2 rounded-sm hover:bg-accent"
-                    onClick={() => insertSkill(s.name)}
-                  >
-                    <div className="text-xs font-medium">/skill {s.name}</div>
-                    <div className="text-[11px] text-muted-foreground line-clamp-1">{s.description}</div>
-                  </button>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* 录制按钮 */}
+        {/* 技能 + 录制工具栏（同一行） */}
         <div className="relative mt-2 flex items-center gap-2">
+          <div ref={skillPopoverRef} className="relative">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setShowSkills((v) => !v)}
+              disabled={isStreaming}
+              title="选择技能"
+            >
+              <Sparkles className="size-3.5" />
+              技能
+            </Button>
+            {showSkills && (
+              <div className="absolute bottom-full mb-2 left-0 w-72 rounded-md border bg-popover p-1 shadow-md z-10">
+                {skills.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-muted-foreground">暂无可用技能</div>
+                ) : (
+                  skills.map((s) => (
+                    <button
+                      key={s.name}
+                      type="button"
+                      className="block w-full text-left px-3 py-2 rounded-sm hover:bg-accent"
+                      onClick={() => insertSkill(s.name)}
+                    >
+                      <div className="text-xs font-medium">/skill {s.name}</div>
+                      <div className="text-[11px] text-muted-foreground line-clamp-1">{s.description}</div>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 录制按钮 */}
           {recorder.state.status === 'idle' && (
             <Button
               variant="outline"
