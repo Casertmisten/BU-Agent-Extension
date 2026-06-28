@@ -5,11 +5,13 @@ llm:
   provider: ${LLM_PROVIDER:-dashscope}
   model: ${LLM_MODEL:-glm-5.1}
   api_key: ${LLM_API_KEY}
+  base_url: ${LLM_BASE_URL:-}
 
 vlm:
   provider: ${VLM_PROVIDER:-dashscope}
   model: ${VLM_MODEL:-qwen3.6-35b-a3b}
   api_key: ${VLM_API_KEY}
+  base_url: ${VLM_BASE_URL:-}
 
 server:
   host: ${SERVER_HOST:-localhost}
@@ -21,7 +23,7 @@ skills:
     - "./skills"
 
 browser:
-  dom_strategy: ${DOM_STRATEGY:-ax}   # "ax"=新版 AX 树解析, "flat"=旧版扁平列表
+  dom_strategy: ${DOM_STRATEGY:-ax}   # "ax"=AX 树, "flat"=扁平列表, "tree"=DOM 树剪枝脱水文本
 
 recorder:
   # 蒸馏用的模型配置（不配则复用 llm 段）

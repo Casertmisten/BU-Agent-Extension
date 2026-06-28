@@ -100,6 +100,7 @@ skills:
 | `VLM_API_KEY` | VLM API Key | - |
 | `SERVER_HOST` | WebSocket 监听地址 | `localhost` |
 | `SERVER_PORT` | WebSocket 端口 | `8765` |
+| `DOM_STRATEGY` | DOM 解析策略（ax / flat / tree） | `ax` |
 
 ### 扩展权限
 
