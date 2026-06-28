@@ -70,16 +70,14 @@ def test_parse_skill_json_invalid_raises():
 
 @pytest.mark.asyncio
 async def test_distill_segments_calls_model_and_parses():
-    """distill_segments 调 model（同步函数返回 async generator of ChatResponse），解析返回的 JSON 为 DistillResult。"""
+    """distill_segments 调 model（async def 返回 ChatResponse），解析返回的 JSON 为 DistillResult。"""
     from agentscope.model._model_response import ChatResponse
 
-    def _fake_model(_msgs):
-        async def _gen():
-            yield ChatResponse(
-                content=[TextBlock(type="text", text='{"skill_name": "login-flow", "description": "登录网站", "skill_md": "# 登录流程"}')],
-                is_last=True,
-            )
-        return _gen()
+    async def _fake_model(_msgs):
+        return ChatResponse(
+            content=[TextBlock(type="text", text='{"skill_name": "login-flow", "description": "登录网站", "skill_md": "# 登录流程"}')],
+            is_last=True,
+        )
 
     mock_model = MagicMock(side_effect=_fake_model)
     result = await distill_segments([_seg()], mock_model, label="登录")

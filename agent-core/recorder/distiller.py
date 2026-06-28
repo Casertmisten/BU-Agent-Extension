@@ -128,17 +128,17 @@ async def distill_segments(
         raise ValueError("无段可蒸馏")
 
     prompt = build_distill_prompt(segments, label)
-    text_buf = ""
 
-    # model([...]) 返回 async generator，每个 yield 是 ChatResponse
-    async for resp in model([
+    # agentscope model 的 __call__ 是 async def，返回 ChatResponse（非流式）
+    resp = await model([
         SystemMsg(name="system", content=DISTILL_SYSTEM),
         UserMsg(name="user", content=prompt),
-    ]):
-        for block in resp.content:
-            text = getattr(block, "text", None)
-            if text:
-                text_buf += text
+    ])
+    text_buf = ""
+    for block in resp.content:
+        text = getattr(block, "text", None)
+        if text:
+            text_buf += text
 
     data = parse_skill_json(text_buf)
 
