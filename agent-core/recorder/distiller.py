@@ -129,16 +129,27 @@ async def distill_segments(
 
     prompt = build_distill_prompt(segments, label)
 
-    # agentscope model 的 __call__ 是 async def，返回 ChatResponse（非流式）
-    resp = await model([
+    # agentscope model 的 __call__ 是 async def，流式模式下返回 AsyncGenerator[ChatResponse]，
+    # 每个 chunk 的 content 是增量 TextBlock；非流式则直接返回 ChatResponse。
+    # 统一用 async for 消费（非流式 ChatResponse 不是 async iterable，单独 await 处理）。
+    result = model([
         SystemMsg(name="system", content=DISTILL_SYSTEM),
         UserMsg(name="user", content=prompt),
     ])
     text_buf = ""
-    for block in resp.content:
-        text = getattr(block, "text", None)
-        if text:
-            text_buf += text
+    if hasattr(result, "__aiter__"):
+        async for resp in result:
+            for block in resp.content:
+                text = getattr(block, "text", None)
+                if text:
+                    text_buf += text
+    else:
+        # 非流式：result 是 coroutine，await 拿 ChatResponse
+        resp = await result
+        for block in resp.content:
+            text = getattr(block, "text", None)
+            if text:
+                text_buf += text
 
     data = parse_skill_json(text_buf)
 

@@ -22,14 +22,16 @@ async def test_pipeline_progress_callbacks(tmp_path: Path):
          "timestamp": 200, "target": {"tag": "button", "text": "提交", "xpath": "/submit"}},
     ]
 
-    async def _fake_model(_msgs):
-        return ChatResponse(
-            content=[TextBlock(
-                type="text",
-                text='{"skill_name": "login", "description": "登录", "skill_md": "# 登录"}',
-            )],
-            is_last=True,
-        )
+    def _fake_model(_msgs):
+        async def _gen():
+            yield ChatResponse(
+                content=[TextBlock(
+                    type="text",
+                    text='{"skill_name": "login", "description": "登录", "skill_md": "# 登录"}',
+                )],
+                is_last=True,
+            )
+        return _gen()
 
     mock_model = MagicMock(side_effect=_fake_model)
     stages: list[str] = []
