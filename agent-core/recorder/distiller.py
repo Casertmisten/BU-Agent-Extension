@@ -42,6 +42,10 @@ skill_md 要求：
 - 用"点击登录按钮""输入用户名"这样的自然语言描述
 - 覆盖：前置条件、关键步骤（有序列表）、终止条件
 - 通用化：适用于同类网站，不只针对录制的那一个
+- 务必简洁：全文不超过 30 行，避免冗长解释
+
+重要：只输出 JSON，不要在 JSON 前后添加任何说明文字。
+skill_md 中的换行用 \\n 转义，确保整个 JSON 合法可解析。
 """
 
 
@@ -85,9 +89,11 @@ def _escape_invalid_json_backslashes(text: str) -> str:
 
 
 def parse_skill_json(text: str) -> dict[str, Any]:
-    """从模型输出解析 JSON，容错处理 code fence 和包裹文本。
+    """从模型输出解析 JSON，容错处理 code fence、包裹文本和截断。
 
-    照搬 Browser-BC harness/llm.py 的 parse_json_from_model 逻辑。
+    照搬 Browser-BC harness/llm.py 的 parse_json_from_model 逻辑，
+    并增加截断容错：当 skill_md 值因 token 上限被截断导致 JSON 不完整时，
+    用正则逐字段提取（skill_md 取已有截断内容，总比丢弃整条蒸馏结果好）。
     """
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.I)
@@ -111,7 +117,54 @@ def parse_skill_json(text: str) -> dict[str, Any]:
             except json.JSONDecodeError:
                 pass
 
+    # 截断容错：JSON 不完整（如 skill_md 值被 token 上限截断）时，
+    # 用正则逐字段提取。各字段的 "key": "value" 结构通常完整，只有最后一个值被截断。
+    recovered = _recover_truncated_fields(cleaned)
+    if recovered:
+        return recovered
+
     raise ValueError(f"无法解析模型输出为 JSON: {text[:200]}...")
+
+
+def _unescape_json_string(s: str) -> str:
+    """对 JSON 字符串值做有限转义还原（\\n→换行 等），不破坏 UTF-8 原文。
+
+    比 unicode_escape 安全：后者会把 UTF-8 字节序列当 Latin-1 处理导致中文乱码。
+    """
+    return (
+        s.replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\r")
+        .replace('\\"', '"')
+        .replace("\\\\", "\\")
+    )
+
+
+def _recover_truncated_fields(text: str) -> dict[str, Any] | None:
+    """从被截断的 JSON 文本中逐字段提取。
+
+    匹配 "skill_name": "..." / "description": "..." / "skill_md": "..."，
+    即使整体 JSON 因截断无法解析，也能抢救出已有内容。
+    """
+    result: dict[str, Any] = {}
+    # 匹配 "key": "value"，value 可含转义引号；未闭合的 value（截断）也尽量取到末尾
+    for key in ("skill_name", "description", "skill_md"):
+        # 优先匹配闭合字符串："key": "value"
+        m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+        if m:
+            result[key] = _unescape_json_string(m.group(1))
+            continue
+        # 未闭合（截断）："key": "value...（到文本末尾）
+        m = re.search(rf'"{key}"\s*:\s*"(.*)$', text, re.DOTALL)
+        if m:
+            result[key] = _unescape_json_string(m.group(1).strip())
+    # 至少要拿到 skill_md 或 skill_name 才算恢复成功
+    if "skill_md" in result or "skill_name" in result:
+        result.setdefault("skill_name", "recorded-skill")
+        result.setdefault("description", "")
+        result.setdefault("skill_md", "")
+        return result
+    return None
 
 
 async def distill_segments(

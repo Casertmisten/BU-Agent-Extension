@@ -68,6 +68,26 @@ def test_parse_skill_json_invalid_raises():
         parse_skill_json("不是 JSON")
 
 
+def test_parse_skill_json_truncated_recovers():
+    """skill_md 值被 token 截断（JSON 不完整）时，正则恢复已有字段。"""
+    raw = '''{
+  "skill_name": "ai-chat-query",
+  "description": "AI对话平台操作流程",
+  "skill_md": "## 前置条件\\n- 已登录\\n\\n## 关键步骤\\n1. 点击新建对话'''
+    data = parse_skill_json(raw)
+    assert data["skill_name"] == "ai-chat-query"
+    assert data["description"] == "AI对话平台操作流程"
+    assert "前置条件" in data["skill_md"]
+
+
+def test_parse_skill_json_truncated_after_skill_name():
+    """只到 skill_name 就截断，也能恢复（skill_md 为空）。"""
+    raw = '{"skill_name": "login", "description": "登录", "skill_md": "# 登录'
+    data = parse_skill_json(raw)
+    assert data["skill_name"] == "login"
+    assert data["skill_md"] == "# 登录"
+
+
 @pytest.mark.asyncio
 async def test_distill_segments_calls_model_and_parses():
     """distill_segments 调 model（async def 返回 async generator，匹配真实流式签名）。"""
