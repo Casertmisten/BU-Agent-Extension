@@ -84,6 +84,23 @@ skills:
 
 新增技能：在已配置的目录下创建 `<技能名>/SKILL.md`，重启后端即可。示例见 `agent-core/skills/example/SKILL.md`。
 
+**录制操作沉淀为技能**：SidePanel 输入框旁的「● 录制」按钮可把你的浏览器操作直接沉淀为技能。点击开始录制 → 在页面上正常操作 → 点击停止 → 确认保存后，后端会自动把这段操作轨迹交给 LLM 蒸馏成 `SKILL.md` 并安装到技能目录，无需手写。
+
+完整流程：
+
+1. 点击「● 录制」开始，扩展 content script 会捕获你的点击、输入、页面跳转等操作（事件自动脱敏，过滤密码等敏感字段）。
+2. 操作完成后点击「■ 停止」，此时仅结束采集、不立即蒸馏，可在确认面板选择「保存」或「丢弃」。
+3. 选择「保存」即触发蒸馏：后端将轨迹切片（atomize）→ LLM 归纳为结构化指令（distill）→ 写入 `SKILL.md` + frontmatter（install），同名技能下次启动即可用。
+
+蒸馏默认复用 `llm` 段模型，可在 `agent-core/config.yaml` 的 `recorder` 段单独配置：
+
+```yaml
+recorder:
+  distill_model: null           # null 表示复用 llm.model
+  batch_size: 500               # 单批上传事件数上限
+  buffer_flush_threshold: 5000  # 内存缓冲落盘阈值
+```
+
 ## 配置
 
 ### 后端配置（agent-core）
@@ -114,16 +131,23 @@ BU-Agent-Extension/
 │   ├── src/
 │   │   ├── entrypoints/       # WXT 入口（background, sidepanel）
 │   │   ├── components/        # React 组件（ChatView, ConfigPanel, HistoryList 等）
-│   │   ├── hooks/             # 自定义 Hooks（useWebSocket, useConfig）
+│   │   ├── hooks/             # 自定义 Hooks（useWebSocket, useConfig, useRecorder）
+│   │   ├── capture/           # 录制捕获（action/mutation recorder + 脱敏 redactor）
 │   │   ├── lib/               # 工具库（ws-client, idb, utils）
 │   │   └── types/             # TypeScript 类型定义
-│   ├── public/content/        # Content Script
+│   ├── public/content/        # Content Script（含录制入口 recorder.content）
 │   └── wxt.config.ts          # WXT 构建配置
 ├── agent-core/                # Python 后端
 │   ├── agent/                 # Agent 核心（BrowserAgent、模型工厂、提示词）
 │   │   ├── agent.py           # BrowserAgent 类：模型+工具+状态组合
 │   │   ├── model.py           # 模型工厂（openai/dashscope）
 │   │   └── prompts.py         # 系统提示词
+│   ├── recorder/              # 录制蒸馏管线（轨迹→技能）
+│   │   ├── pipeline.py        # 编排：atomize → distill → install
+│   │   ├── atomizer.py        # 轨迹切片
+│   │   ├── distiller.py       # LLM 蒸馏 + JSON 容错解析
+│   │   ├── installer.py       # 写入 SKILL.md + frontmatter
+│   │   └── event_utils.py     # 事件归一化与文本摘要
 │   ├── server.py              # WebSocket 服务器入口
 │   ├── browser/               # 浏览器连接与工具（DOM 操作、截图等）
 │   ├── config_loader.py       # 配置加载
