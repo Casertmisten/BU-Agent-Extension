@@ -27,6 +27,7 @@ Thumbs.db
 
 # Agent core
 agent-core/uv.lock
+agent-core/skills/
 
 # WXT build output
 chrome-extension/.output/

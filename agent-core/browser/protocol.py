@@ -13,6 +13,15 @@ MSG_TYPES = frozenset({
     "new_session",   # SidePanel → Agent：新建会话，重置上下文
     "browser_state", # 扩展 → Agent：浏览器状态快照（标签页、URL、可交互元素）
     "tab_change",    # 扩展 → Agent：标签页变化通知
+    # 录制功能（SidePanel → 后端）
+    "record_start",      # 开始录制
+    "record_event",      # 批量上传录制事件
+    "record_stop",       # 停止采集（保留 session，不蒸馏）
+    "record_distill",    # 用户确认保存 → 触发蒸馏
+    "record_discard",    # 用户选择丢弃 → 删除 session
+    "record_redistill",  # 从 trace 重蒸馏（失败重试）
+    "get_status",        # 查询连接状态
+    "get_skills",        # 拉取技能清单
 })
 
 

@@ -59,6 +59,10 @@ export default defineBackground(() => {
       // 缓存并转发后端推送的技能清单到 sidepanel
       cachedSkills = (msg as any).skills ?? []
       chrome.runtime.sendMessage(msg).catch(() => {})
+    } else if (type.startsWith('record_')) {
+      // 转发所有 record_* 消息到 SidePanel
+      console.log('[BU-Agent] forwarding %s to sidepanel', type)
+      chrome.runtime.sendMessage(msg).catch(() => {})
     }
   })
 
@@ -67,6 +71,125 @@ export default defineBackground(() => {
   })
 
   wsClient.connect()
+
+  // ====== 录制功能 ======
+  // 录制会话：trace_id → {tabId, buffer, seq, label}
+  let activeRecordSession: {
+    trace_id: string
+    tabId: number
+    buffer: any[]
+    seq: number
+    label: string
+    flushTimer: ReturnType<typeof setInterval> | null
+  } | null = null
+
+  const RECORD_BATCH_SIZE = 500
+  const RECORD_FLUSH_INTERVAL_MS = 2000  // 定时 flush，避免低频录制时事件积压
+
+  /** 确保录制 content script 已注入目标 tab。
+   *  WXT 静态注册的 content script 在新页面加载时自动注入；
+   *  但扩展更新前已打开的页面没有，这里用 executeScript 兜底（重复注入会报错被 catch）。 */
+  async function ensureRecorderInjected(tabId: number) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content-scripts/recorder.js'],
+      })
+    } catch (err) {
+      // 页面已自动注入过、或 chrome:// 等不可注入页面——忽略
+      console.debug('[BU-Agent] Recorder inject skipped:', (err as Error).message)
+    }
+  }
+
+  /** 把缓冲区事件批量发到后端 */
+  function flushRecordBuffer() {
+    if (!activeRecordSession || !wsClient.isConnected()) return
+    const session = activeRecordSession
+    if (session.buffer.length === 0) return
+
+    const events = session.buffer.splice(0, RECORD_BATCH_SIZE)
+    session.seq += 1
+    wsClient.send({
+      type: 'record_event',
+      trace_id: session.trace_id,
+      events,
+      seq: session.seq,
+    })
+  }
+
+  /** 启动录制：注入 content + 发 record_start + 启动定时 flush */
+  async function startRecording(tabId: number, label: string): Promise<string | null> {
+    if (activeRecordSession) {
+      console.warn('[BU-Agent] 已有录制进行中')
+      return null
+    }
+    console.log('[BU-Agent] startRecording: tabId=%d label=%s', tabId, label)
+    const trace_id = crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    activeRecordSession = {
+      trace_id,
+      tabId,
+      buffer: [],
+      seq: 0,
+      label,
+      flushTimer: setInterval(flushRecordBuffer, RECORD_FLUSH_INTERVAL_MS),
+    }
+
+    await ensureRecorderInjected(tabId)
+
+    // 给 content 发 start 指令（content 已由 manifest 自动注入或上面兜底注入）
+    chrome.tabs.sendMessage(tabId, {
+      type: 'record_start_content',
+      trace_id,
+      tab_id: tabId,
+    }).catch((err) => {
+      console.warn('[BU-Agent] record_start_content 未送达:', (err as Error).message)
+    })
+
+    console.log('[BU-Agent] sending record_start to backend, trace_id=%s', trace_id)
+    wsClient.send({ type: 'record_start', tab_id: tabId, label, trace_id })
+    chrome.action.setBadgeText({ text: '●' })
+    chrome.action.setBadgeBackgroundColor({ color: '#ef4444' })
+    return trace_id
+  }
+
+  /** 停止采集：通知 content 停止 + flush 剩余 + 发 record_stop（后端回 record_stopped 摘要）。
+   *  不触发蒸馏，保留 session 供用户确认。 */
+  async function stopRecording(finalLabel?: string): Promise<void> {
+    if (!activeRecordSession) return
+    const session = activeRecordSession
+
+    // 通知 content 停止（content 会 flush mutation summary）
+    chrome.tabs.sendMessage(session.tabId, { type: 'record_stop_content' }).catch(() => {})
+
+    // 等待 content flush 完成（短延迟确保 mutation 事件到达）
+    await new Promise((r) => setTimeout(r, 200))
+
+    // 最后 flush 一次
+    flushRecordBuffer()
+    if (session.flushTimer) {
+      clearInterval(session.flushTimer)
+    }
+
+    wsClient.send({
+      type: 'record_stop',
+      trace_id: session.trace_id,
+      label: finalLabel || session.label,
+    })
+
+    chrome.action.setBadgeText({ text: '' })
+  }
+
+  /** 确认保存：发 record_distill 触发蒸馏，清理本地 session */
+  function confirmDistill(traceId: string, label: string): void {
+    wsClient.send({ type: 'record_distill', trace_id: traceId, label })
+    activeRecordSession = null
+  }
+
+  /** 丢弃：发 record_discard，清理本地 session */
+  function discardRecording(traceId: string): void {
+    wsClient.send({ type: 'record_discard', trace_id: traceId })
+    activeRecordSession = null
+  }
 
   async function handleAction(msg: Record<string, unknown> & { action: string; task_id: string }) {
     const { action, task_id } = msg
@@ -238,6 +361,51 @@ export default defineBackground(() => {
         sendToContentScript({ action: 'disable_overlay' })
       }
       sendResponse({ received: true })
+    }
+    if (message.type === 'record_start') {
+      getActiveTab().then((tab) => {
+        if (tab?.id) {
+          startRecording(tab.id, message.label || '').then((trace_id) => {
+            sendResponse({ trace_id })
+          })
+        } else {
+          sendResponse({ trace_id: null })
+        }
+      })
+      return true  // 异步响应
+    }
+    if (message.type === 'record_stop') {
+      stopRecording(message.label).then(() => sendResponse({ stopped: true }))
+      return true
+    }
+    if (message.type === 'record_distill') {
+      confirmDistill(message.trace_id, message.label || '')
+      sendResponse({ received: true })
+    }
+    if (message.type === 'record_discard') {
+      discardRecording(message.trace_id)
+      sendResponse({ received: true })
+    }
+    if (message.type === 'record_redistill') {
+      wsClient.send({ type: 'record_redistill', trace_id: message.trace_id })
+      sendResponse({ received: true })
+    }
+    if (message.type === 'record_event_content') {
+      // content script 发来的单条事件 → 聚合到 buffer
+      if (activeRecordSession && message.event) {
+        activeRecordSession.buffer.push(message.event)
+        // 满 batch 立即 flush
+        if (activeRecordSession.buffer.length >= RECORD_BATCH_SIZE) {
+          flushRecordBuffer()
+        }
+      }
+    }
+    if (message.type === 'get_recorder_state') {
+      sendResponse({
+        active: activeRecordSession !== null,
+        trace_id: activeRecordSession?.trace_id ?? null,
+        eventCount: activeRecordSession?.buffer.length ?? 0,
+      })
     }
     return false
   })

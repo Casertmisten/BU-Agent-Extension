@@ -79,3 +79,66 @@ export type View =
   | { name: 'config' }
   | { name: 'history' }
   | { name: 'history-detail'; sessionId: string }
+
+// ====== 录制功能（record_*）======
+
+/** 录制状态 */
+export type RecorderStatus = 'idle' | 'recording' | 'stopped' | 'distilling' | 'done'
+
+/** 录制蒸馏阶段 */
+export type DistillStage = 'atomize' | 'distill' | 'install'
+
+/** SidePanel → 后台的录制消息 */
+export interface RecordStartMsg {
+  type: 'record_start'
+  tab_id: number
+  label?: string
+}
+export interface RecordStopMsg {
+  type: 'record_stop'
+  trace_id: string
+  label?: string
+}
+export interface RecordRedistillMsg {
+  type: 'record_redistill'
+  trace_id: string
+}
+
+/** 后台 → SidePanel 的录制消息 */
+export interface RecordStartedMsg {
+  type: 'record_started'
+  trace_id: string
+}
+export interface RecordStoppedMsg {
+  type: 'record_stopped'
+  trace_id: string
+  event_count: number
+  domains: string[]
+  duration_ms: number
+}
+export interface RecordProgressMsg {
+  type: 'record_progress'
+  received_events: number
+  seq: number
+}
+export interface RecordDistillingMsg {
+  type: 'record_distilling'
+  trace_id: string
+}
+export interface RecordDistillProgressMsg {
+  type: 'record_distill_progress'
+  stage: DistillStage
+  message: string
+}
+export interface RecordDoneMsg {
+  type: 'record_done'
+  trace_id: string
+  skill_name: string
+  skill_path: string
+}
+export interface RecordErrorMsg {
+  type: 'record_error'
+  trace_id: string
+  stage: string
+  message: string
+}

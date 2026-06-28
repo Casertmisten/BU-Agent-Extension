@@ -13,15 +13,25 @@ from logger import get_logger, setup_logging
 import asyncio
 import json
 import time
+from pathlib import Path
+from uuid import uuid4
 from dotenv import load_dotenv
 
 load_dotenv()
+
+import websockets
+
+from agent import BrowserAgent
+from recorder.pipeline import run_distill_pipeline
+
 log = get_logger("server")
 
 # 全局唯一的 Agent 实例，因为浏览器只有一个实例，Agent 也应该是单例的，避免多个Agent实例冲突
 _agent: BrowserAgent | None = None
 # 当前正在运行的 agent task，用于支持取消
 _current_task: asyncio.Task | None = None
+# 录制会话：trace_id → {events, label, tab_id}
+_record_sessions: dict[str, dict] = {}
 
 
 def _get_or_create_agent(config: dict) -> BrowserAgent:
@@ -127,9 +137,199 @@ async def handle_client(websocket, config: dict):
                 else:
                     log.debug("收到 stop 但无运行中的任务")
 
+            elif msg_type == "record_start":
+                trace_id = msg.get("trace_id") or uuid4().hex[:12]
+                _record_sessions[trace_id] = {
+                    "events": [],
+                    "label": msg.get("label", ""),
+                    "tab_id": msg.get("tab_id", -1),
+                }
+                await websocket.send(json.dumps({"type": "record_started", "trace_id": trace_id}))
+                log.info("录制开始: trace_id=%s", trace_id)
+
+            elif msg_type == "record_event":
+                trace_id = msg.get("trace_id")
+                session = _record_sessions.get(trace_id)
+                if session is None:
+                    log.warning("未知 trace_id 的 record_event: %s", trace_id)
+                    continue
+                events = msg.get("events", [])
+                session["events"].extend(events)
+                await websocket.send(json.dumps({
+                    "type": "record_progress",
+                    "received_events": len(session["events"]),
+                    "seq": msg.get("seq", 0),
+                }))
+
+            elif msg_type == "record_stop":
+                # 停止采集，但保留 session 在内存，等待用户确认是否蒸馏
+                trace_id = msg.get("trace_id")
+                session = _record_sessions.get(trace_id)
+                if session is None:
+                    await websocket.send(json.dumps({
+                        "type": "record_error",
+                        "trace_id": trace_id,
+                        "stage": "stop",
+                        "message": "录制会话不存在",
+                    }))
+                    continue
+                # 更新 label（停止确认时用户可填技能名）
+                session["label"] = msg.get("label") or session.get("label", "")
+                # 统计摘要供前端展示
+                events = session["events"]
+                domains = sorted({
+                    e.get("url", "") and registered_domain_from_url(e["url"])
+                    for e in events if e.get("url")
+                } - {""})
+                await websocket.send(json.dumps({
+                    "type": "record_stopped",
+                    "trace_id": trace_id,
+                    "event_count": len(events),
+                    "domains": domains,
+                    "duration_ms": _events_duration_ms(events),
+                }))
+                log.info("录制停止: trace_id=%s events=%d", trace_id, len(events))
+
+            elif msg_type == "record_distill":
+                # 用户确认保存 → 触发蒸馏（从内存 session 取事件）
+                trace_id = msg.get("trace_id")
+                session = _record_sessions.pop(trace_id, None)
+                if session is None:
+                    await websocket.send(json.dumps({
+                        "type": "record_error",
+                        "trace_id": trace_id,
+                        "stage": "distill",
+                        "message": "录制会话不存在或已处理",
+                    }))
+                    continue
+                label = msg.get("label") or session.get("label", "")
+                asyncio.create_task(_run_distill(
+                    websocket, agent, trace_id, session["events"], label, config,
+                ))
+
+            elif msg_type == "record_discard":
+                # 用户选择丢弃 → 删除内存 session，不蒸馏
+                trace_id = msg.get("trace_id")
+                _record_sessions.pop(trace_id, None)
+                log.info("录制已丢弃: trace_id=%s", trace_id)
+
+            elif msg_type == "record_redistill":
+                # 从 _source_trace.json 重蒸馏（失败后重试用）
+                trace_id = msg.get("trace_id")
+                asyncio.create_task(_redistill_from_trace(websocket, agent, trace_id, config))
+
     except websockets.ConnectionClosed:
         log.info("客户端断开连接，清理挂起的工具请求")
         agent.conn.disconnect()
+
+
+def registered_domain_from_url(url: str) -> str:
+    """从 URL 提取 eTLD+1 风格域名（简单启发式，供摘要用）。"""
+    try:
+        hostname = url.split("//")[-1].split("/")[0].split("?")[0]
+        hostname = hostname.lstrip("www.")
+        parts = hostname.split(".")
+        return ".".join(parts[-2:]) if len(parts) >= 2 else hostname
+    except Exception:
+        return ""
+
+
+def _events_duration_ms(events: list[dict]) -> int:
+    """计算事件序列的时长（首末 timestamp 差），单位毫秒。"""
+    timestamps = [int(e.get("timestamp", 0)) for e in events if e.get("timestamp") is not None]
+    if len(timestamps) < 2:
+        return 0
+    return max(0, max(timestamps) - min(timestamps))
+
+
+async def _run_distill(websocket, agent, trace_id, raw_events, label, config):
+    """执行蒸馏管线，推送进度和结果到 WS。"""
+    skills_dirs = config.get("skills", {}).get("dirs", [])
+    skills_root = Path(skills_dirs[0]) if skills_dirs else Path("./skills")
+
+    # 蒸馏模型：复用 llm 配置（除非 recorder.distill_model 单独配置）
+    recorder_cfg = config.get("recorder", {})
+    distill_model_cfg = recorder_cfg.get("distill_model")
+    if distill_model_cfg:
+        model = create_model(distill_model_cfg, role="distill")
+    else:
+        # 复用 BrowserAgent 的 llm model（已初始化）
+        model = agent._agent.model if agent._agent else create_model(config["llm"], role="distill")
+
+    async def on_progress(stage, message):
+        try:
+            await websocket.send(json.dumps({
+                "type": "record_distill_progress",
+                "stage": stage,
+                "message": message,
+            }))
+        except Exception:
+            pass
+
+    try:
+        await websocket.send(json.dumps({"type": "record_distilling", "trace_id": trace_id}))
+
+        result = await run_distill_pipeline(
+            trace_id=trace_id,
+            raw_events=raw_events,
+            label=label,
+            model=model,
+            skills_root=skills_root,
+            on_progress=on_progress,
+        )
+
+        # 蒸馏安装成功后，刷新前端技能列表（LocalSkillLoader 会实时扫到新技能）
+        skills = await agent.list_skills()
+        await websocket.send(json.dumps({"type": "skills_list", "skills": skills}))
+
+        await websocket.send(json.dumps({
+            "type": "record_done",
+            "trace_id": trace_id,
+            "skill_name": result["skill_name"],
+            "skill_path": result["skill_path"],
+        }))
+        log.info("录制蒸馏完成: trace_id=%s skill=%s", trace_id, result["skill_name"])
+
+    except Exception as e:
+        log.error("录制蒸馏失败: trace_id=%s %s", trace_id, e, exc_info=True)
+        try:
+            await websocket.send(json.dumps({
+                "type": "record_error",
+                "trace_id": trace_id,
+                "stage": "distill",
+                "message": str(e),
+            }))
+        except Exception:
+            pass
+
+
+async def _redistill_from_trace(websocket, agent, trace_id, config):
+    """从 _source_trace.json 重蒸馏（失败重试用）。"""
+    skills_dirs = config.get("skills", {}).get("dirs", [])
+    skills_root = Path(skills_dirs[0]) if skills_dirs else Path("./skills")
+
+    # 查找该 trace_id 对应的 _source_trace.json
+    trace_files = list(skills_root.rglob("_source_trace.json"))
+    trace_events = None
+    for tf in trace_files:
+        try:
+            data = json.loads(tf.read_text())
+            if data.get("trace_id") == trace_id:
+                trace_events = data.get("events", [])
+                break
+        except Exception:
+            continue
+
+    if trace_events is None:
+        await websocket.send(json.dumps({
+            "type": "record_error",
+            "trace_id": trace_id,
+            "stage": "redistill",
+            "message": "找不到原始录制数据",
+        }))
+        return
+
+    await _run_distill(websocket, agent, trace_id, trace_events, "", config)
 
 
 async def main():
