@@ -46,7 +46,8 @@ def test_msg_types_complete():
         "action", "result", "heartbeat", "page_ready", "stream", "mode_change",
         "user_message", "stop", "new_session", "browser_state", "tab_change",
         # 录制功能
-        "record_start", "record_event", "record_stop", "record_redistill",
+        "record_start", "record_event", "record_stop", "record_distill",
+        "record_discard", "record_redistill",
         "get_status", "get_skills",
     }
     assert expected == MSG_TYPES

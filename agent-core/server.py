@@ -161,8 +161,9 @@ async def handle_client(websocket, config: dict):
                 }))
 
             elif msg_type == "record_stop":
+                # 停止采集，但保留 session 在内存，等待用户确认是否蒸馏
                 trace_id = msg.get("trace_id")
-                session = _record_sessions.pop(trace_id, None)
+                session = _record_sessions.get(trace_id)
                 if session is None:
                     await websocket.send(json.dumps({
                         "type": "record_error",
@@ -171,11 +172,45 @@ async def handle_client(websocket, config: dict):
                         "message": "录制会话不存在",
                     }))
                     continue
+                # 更新 label（停止确认时用户可填技能名）
+                session["label"] = msg.get("label") or session.get("label", "")
+                # 统计摘要供前端展示
+                events = session["events"]
+                domains = sorted({
+                    e.get("url", "") and registered_domain_from_url(e["url"])
+                    for e in events if e.get("url")
+                } - {""})
+                await websocket.send(json.dumps({
+                    "type": "record_stopped",
+                    "trace_id": trace_id,
+                    "event_count": len(events),
+                    "domains": domains,
+                    "duration_ms": _events_duration_ms(events),
+                }))
+                log.info("录制停止: trace_id=%s events=%d", trace_id, len(events))
+
+            elif msg_type == "record_distill":
+                # 用户确认保存 → 触发蒸馏（从内存 session 取事件）
+                trace_id = msg.get("trace_id")
+                session = _record_sessions.pop(trace_id, None)
+                if session is None:
+                    await websocket.send(json.dumps({
+                        "type": "record_error",
+                        "trace_id": trace_id,
+                        "stage": "distill",
+                        "message": "录制会话不存在或已处理",
+                    }))
+                    continue
                 label = msg.get("label") or session.get("label", "")
-                # 触发蒸馏 task（不阻塞 WS）
                 asyncio.create_task(_run_distill(
                     websocket, agent, trace_id, session["events"], label, config,
                 ))
+
+            elif msg_type == "record_discard":
+                # 用户选择丢弃 → 删除内存 session，不蒸馏
+                trace_id = msg.get("trace_id")
+                _record_sessions.pop(trace_id, None)
+                log.info("录制已丢弃: trace_id=%s", trace_id)
 
             elif msg_type == "record_redistill":
                 # 从 _source_trace.json 重蒸馏（失败后重试用）
@@ -185,6 +220,25 @@ async def handle_client(websocket, config: dict):
     except websockets.ConnectionClosed:
         log.info("客户端断开连接，清理挂起的工具请求")
         agent.conn.disconnect()
+
+
+def registered_domain_from_url(url: str) -> str:
+    """从 URL 提取 eTLD+1 风格域名（简单启发式，供摘要用）。"""
+    try:
+        hostname = url.split("//")[-1].split("/")[0].split("?")[0]
+        hostname = hostname.lstrip("www.")
+        parts = hostname.split(".")
+        return ".".join(parts[-2:]) if len(parts) >= 2 else hostname
+    except Exception:
+        return ""
+
+
+def _events_duration_ms(events: list[dict]) -> int:
+    """计算事件序列的时长（首末 timestamp 差），单位毫秒。"""
+    timestamps = [int(e.get("timestamp", 0)) for e in events if e.get("timestamp") is not None]
+    if len(timestamps) < 2:
+        return 0
+    return max(0, max(timestamps) - min(timestamps))
 
 
 async def _run_distill(websocket, agent, trace_id, raw_events, label, config):

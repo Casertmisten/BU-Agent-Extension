@@ -87,8 +87,38 @@ async def test_record_event_appends_to_session(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_record_stop_triggers_distill(monkeypatch, tmp_path):
-    """record_stop 应触发蒸馏 task（mock 掉实际蒸馏）。"""
+async def test_record_stop_keeps_session_and_replies_summary(monkeypatch):
+    """record_stop 应保留 session（不蒸馏），回 record_stopped 携带摘要。"""
+    agent = _mock_agent()
+    server._agent = agent
+    server._current_task = None
+
+    sessions = {"t1": {"events": [
+        {"kind": "action", "action_type": "click", "url": "https://x.com", "timestamp": 1000},
+        {"kind": "action", "action_type": "click", "url": "https://x.com", "timestamp": 3000},
+    ], "label": "", "tab_id": 1}}
+    monkeypatch.setattr(server, "_record_sessions", sessions)
+
+    try:
+        ws = FakeWS([json.dumps({"type": "record_stop", "trace_id": "t1", "label": "登录"})])
+        await server.handle_client(ws, {"skills": {"dirs": ["./skills"]}})
+
+        stopped = [json.loads(s) for s in ws.sent if json.loads(s).get("type") == "record_stopped"]
+        assert len(stopped) == 1
+        assert stopped[0]["trace_id"] == "t1"
+        assert stopped[0]["event_count"] == 2
+        assert "x.com" in stopped[0]["domains"]
+        # session 仍在内存（等用户确认蒸馏）
+        assert "t1" in server._record_sessions
+        assert server._record_sessions["t1"]["label"] == "登录"
+    finally:
+        server._agent = None
+        server._current_task = None
+
+
+@pytest.mark.asyncio
+async def test_record_distill_triggers_pipeline(monkeypatch, tmp_path):
+    """record_distill 应从 session 取事件触发蒸馏，并清理 session。"""
     agent = _mock_agent()
     server._agent = agent
     server._current_task = None
@@ -108,18 +138,37 @@ async def test_record_stop_triggers_distill(monkeypatch, tmp_path):
     monkeypatch.setattr("server.run_distill_pipeline", _fake_pipeline)
 
     try:
-        ws = FakeWS([json.dumps({"type": "record_stop", "trace_id": "t1"})])
+        ws = FakeWS([json.dumps({"type": "record_distill", "trace_id": "t1", "label": "登录"})])
         await server.handle_client(ws, {
             "skills": {"dirs": [str(tmp_path / "skills")]},
             "llm": {"provider": "dashscope", "model": "x", "api_key": "k"},
         })
 
-        # 等蒸馏 task 跑完
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.2)  # 等蒸馏 task
 
         assert captured.get("trace_id") == "t1"
         assert captured.get("events_count") == 1
         assert "t1" not in server._record_sessions  # session 已清理
+    finally:
+        server._agent = None
+        server._current_task = None
+
+
+@pytest.mark.asyncio
+async def test_record_discard_removes_session(monkeypatch):
+    """record_discard 应删除 session，不蒸馏。"""
+    agent = _mock_agent()
+    server._agent = agent
+    server._current_task = None
+
+    sessions = {"t1": {"events": [], "label": "", "tab_id": 1}}
+    monkeypatch.setattr(server, "_record_sessions", sessions)
+
+    try:
+        ws = FakeWS([json.dumps({"type": "record_discard", "trace_id": "t1"})])
+        await server.handle_client(ws, {"skills": {"dirs": ["./skills"]}})
+
+        assert "t1" not in server._record_sessions
     finally:
         server._agent = None
         server._current_task = None
